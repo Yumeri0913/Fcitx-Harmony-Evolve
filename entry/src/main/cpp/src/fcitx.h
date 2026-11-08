@@ -15,8 +15,13 @@ struct InputContextState {
     bool accepted;
 };
 
+void setupLog();
+// files is the process's private files dir, shared the dir shared by the app and the input method.
+void setupEnv(const std::string &bundle, const std::string &resfile, const std::string &files,
+              const std::string &shared, const std::string &locale);
 // locale is like zh_CN, for translated names.
-void init(const std::string &bundle, const std::string &resfile, const std::string &files, const std::string &locale);
+void init(const std::string &bundle, const std::string &resfile, const std::string &files, const std::string &shared,
+          const std::string &locale);
 void focusIn(bool clientPreedit);
 void focusOut();
 InputContextState reset();
@@ -28,9 +33,9 @@ void activateStatusAreaAction(int id);
 void toggle();
 void setCurrentInputMethod(const std::string &inputMethod);
 void scroll(int start, int count);
-void save();
-// Merge pinyin options written by the main app at path into conf/pinyin.conf and apply them.
-void applyPinyinConfig(const std::string &path);
+// Reload config if the settings page changed it. Returns whether it did.
+bool reloadConfigIfChanged(const std::string &shared);
+void save(const std::string &shared);
 // Google Pinyin user words, UTF-8 lines of "word\tpin'yin\tcount".
 // Merge into the running pinyin engine. Returns "added existing invalid".
 std::string importGooglePinyinWords(const std::string &tsv);

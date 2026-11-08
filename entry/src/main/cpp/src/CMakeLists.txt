@@ -4,6 +4,7 @@ add_library(fcitx SHARED
     fcitx.cpp
     keycode.cpp
     inputmethod.cpp
+    settings.cpp
     "${GOOGLEPINYIN_DIR}/googlepinyin_userdata.cpp"
 )
 target_include_directories(fcitx PRIVATE "${GOOGLEPINYIN_DIR}")

@@ -10,10 +10,9 @@ import { FcitxEvent } from './FcitxEvent';
 import { convertCode } from './keycode';
 import { onTextChange, redo, resetStacks, undo } from './TextOperation';
 import {
-  fileMtime, ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath,
+  ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath,
   readText, removeFile, userWordsSnapshotPath, writeText
 } from '../../common/Settings';
-import { pinyinConfigPath } from '../../common/PinyinConfig';
 
 // Writing the user words snapshot reads all of history, so not on every hide.
 const SNAPSHOT_INTERVAL = 60 * 1000
@@ -85,8 +84,6 @@ export class KeyboardController {
   private sharedDir = ''
   private settings: KeyboardSettings | null = null
   private hapticPresetSupported = true
-  // The main app's pinyin.conf as last applied.
-  private pinyinConfigMtime = 0
   private lastSnapshotTime = 0
 
   constructor() {
@@ -444,7 +441,7 @@ export class KeyboardController {
         console.debug('show')
         // Settings may have been changed in the main app.
         this.loadSettings()
-        this.applyPinyinConfigIfChanged()
+        fcitx.reloadConfigIfChanged(this.sharedDir)
         this.applyPendingImport()
       })
       this.panel.on('hide', () => {
@@ -452,10 +449,8 @@ export class KeyboardController {
         this.processResult(fcitx.reset()) // Need it when dragging right edge to collapse keyboard.
         this.sendEvent({ type: 'HIDE' })
         // Persist learned words now instead of waiting for the periodic save, like
-        // fcitx5-android. Saving also writes configs from memory, so pick up the main
-        // app's changes first.
-        this.applyPinyinConfigIfChanged()
-        fcitx.save()
+        // fcitx5-android. Config changed by the settings page is reloaded first.
+        fcitx.save(this.sharedDir)
         this.writeUserWordsSnapshot(false)
       })
       this.panel.resize(width, containerHeight)
@@ -467,15 +462,6 @@ export class KeyboardController {
     const settings = loadSettings(this.sharedDir)
     this.settings = settings
     this.sendEvent({ type: 'CONFIG', data: { theme: settings.theme, keyBorder: settings.keyBorder } })
-  }
-
-  private applyPinyinConfigIfChanged() {
-    const path = pinyinConfigPath(this.sharedDir)
-    const mtime = fileMtime(path)
-    if (mtime !== 0 && mtime !== this.pinyinConfigMtime) {
-      fcitx.applyPinyinConfig(path)
-      this.pinyinConfigMtime = mtime
-    }
   }
 
   // The main app can't read fcitx's user data, so leave a copy for its export.

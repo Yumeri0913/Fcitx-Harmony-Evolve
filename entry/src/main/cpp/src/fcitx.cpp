@@ -1,5 +1,6 @@
 #include "fcitx.h"
 #include <fcitx-utils/event.h>
+#include <fcitx-utils/i18n.h>
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/standardpath.h>
 #include <fcitx-utils/standardpaths.h>
@@ -9,9 +10,12 @@
 #include <fcitx/action.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/globalconfig.h>
+#include <fcitx/inputmethodmanager.h>
 #include <fcitx/instance.h>
 #include <fcitx/userinterfacemanager.h>
 #include <thread>
+#include <clocale>
+#include <libintl.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <filesystem>
@@ -72,8 +76,14 @@ static std::string nativeLibraryDir(const ::fs::path &bundlePath) {
     return bundlePath / "libs" / ARCH;
 }
 
+std::string configHome(const std::string &shared) { return ::fs::path(shared) / "config"; }
+
+size_t configSignature(const std::string &shared);
+// Config dir as last read or written by this process.
+static size_t configSignature_ = 0;
+
 void setupEnv(const std::string &bundle, const std::string &resfile, const std::string &files,
-              const std::string &locale) {
+              const std::string &shared, const std::string &locale) {
     // resfile is /data/storage/el1/bundle/entry/resources/resfile
     ::fs::path bundlePath = bundle;
     ::fs::path resfilePath = resfile;
@@ -88,10 +98,10 @@ void setupEnv(const std::string &bundle, const std::string &resfile, const std::
     setenv("FCITX_DATA_DIRS", fcitx_data_dirs.c_str(), 1);
     setenv("LIBIME_MODEL_DIRS", libime_model_dirs.c_str(), 1);
     setenv("XKB_CONFIG_ROOT", xkb_config_root.c_str(), 1);
-    // User config and data (pinyin user.dict and user.history) live in the app's files dir,
-    // which the main ability shares, e.g. to export user words.
+    // Config is in the dir shared with the main app, whose settings edit it. User data
+    // (pinyin user.dict and user.history) stays private to the process.
     ::fs::path filesPath = files;
-    std::string xdg_config_home = filesPath / "config";
+    std::string xdg_config_home = configHome(shared);
     std::string xdg_data_home = filesPath / "data";
     std::string xdg_cache_home = filesPath / "cache";
     setenv("XDG_CONFIG_HOME", xdg_config_home.c_str(), 1);
@@ -99,12 +109,35 @@ void setupEnv(const std::string &bundle, const std::string &resfile, const std::
     setenv("XDG_CACHE_HOME", xdg_cache_home.c_str(), 1);
     // isAndroid() is true on HarmonyOS, so fcitx takes the UI language from here.
     setenv("FCITX_LOCALE", locale.c_str(), 1);
+    // gettext picks the catalog from LANGUAGE, e.g. zh_CN, but ignores it in the C locale.
+    setenv("LANGUAGE", locale.c_str(), 1);
+    std::string lang = locale + ".UTF-8";
+    setenv("LANG", lang.c_str(), 1);
+    setlocale(LC_MESSAGES, lang.c_str());
+    // Translations are bundled, not at the compile time /usr/share/locale. Registering a
+    // domain first makes later registrations by addons keep this path. The bundled
+    // libintl-lite doesn't search a locale dir, so load each catalog explicitly.
+    ::fs::path localeDir = xdg_data_dirs / "locale";
+    std::vector<std::string> languages{locale};
+    if (auto underscore = locale.find('_'); underscore != std::string::npos) {
+        languages.push_back(locale.substr(0, underscore));
+    }
+    for (const char *domain : {"fcitx5", "fcitx5-chinese-addons", "fcitx5-lua", "xkeyboard-config", "iso_639-3"}) {
+        registerDomain(domain, localeDir);
+        for (const auto &language : languages) {
+            auto mo = localeDir / language / "LC_MESSAGES" / (std::string(domain) + ".mo");
+            if (::fs::exists(mo)) {
+                loadMessageCatalog(domain, mo.c_str());
+                break;
+            }
+        }
+    }
 }
 
 // Google Pinyin starts in Chinese, like the fcitx5-android fork. Other defaults come
 // from fcitx's Android branch (isAndroid() is true on HarmonyOS).
-static void setDefaultConfig(const std::string &files) {
-    ::fs::path configDir = ::fs::path(files) / "config" / "fcitx5";
+static void setDefaultConfig(const std::string &shared) {
+    ::fs::path configDir = ::fs::path(configHome(shared)) / "fcitx5";
     if (!::fs::exists(configDir / "config")) {
         RawConfig raw;
         raw.setValueByPath("Behavior/ActiveByDefault", "True");
@@ -115,9 +148,9 @@ static void setDefaultConfig(const std::string &files) {
 
 // Builds before isAndroid() covered HarmonyOS saved desktop defaults, which then win over
 // the Android ones. Switch those options once.
-static void migrateToAndroidDefaults(const std::string &files) {
+static void migrateToAndroidDefaults(const std::string &shared) {
     constexpr int version = 1;
-    ::fs::path marker = ::fs::path(files) / "config" / "fcitx5" / "harmony-defaults-version";
+    ::fs::path marker = ::fs::path(configHome(shared)) / "fcitx5" / "harmony-defaults-version";
     int current = 0;
     if (std::ifstream in(marker); in) {
         in >> current;
@@ -142,9 +175,27 @@ static void migrateToAndroidDefaults(const std::string &files) {
     std::ofstream(marker) << version;
 }
 
-void init(const std::string &bundle, const std::string &resfile, const std::string &files, const std::string &locale) {
+// Builds before the settings page kept config in the private files dir.
+static void moveConfigToShared(const std::string &files, const std::string &shared) {
+    ::fs::path from = ::fs::path(files) / "config";
+    ::fs::path to = configHome(shared);
+    std::error_code ec;
+    if (::fs::exists(to, ec) || !::fs::exists(from, ec)) {
+        return;
+    }
+    ::fs::create_directories(to.parent_path(), ec);
+    ::fs::copy(from, to, ::fs::copy_options::recursive, ec);
+    if (ec) {
+        FCITX_ERROR() << "Failed to move config: " << ec.message();
+    }
+}
+
+void init(const std::string &bundle, const std::string &resfile, const std::string &files, const std::string &shared,
+          const std::string &locale) {
     setupLog();
-    setupEnv(bundle, resfile, files, locale);
+    moveConfigToShared(files, shared);
+    setupEnv(bundle, resfile, files, shared, locale);
+    bool hasProfile = ::fs::exists(::fs::path(configHome(shared)) / "fcitx5" / "profile");
     // f5a and f5j need it. Not sure if f5h needs it but just do it.
     umask(007);
     StandardPath::global().syncUmask(); // Must happen after setupEnv.
@@ -154,15 +205,18 @@ void init(const std::string &bundle, const std::string &resfile, const std::stri
     auto &addonMgr = instance->addonManager();
     addonMgr.registerDefaultLoader(&getStaticAddon());
     instance->initialize();
-    setDefaultConfig(files);
-    migrateToAndroidDefaults(files);
+    setDefaultConfig(shared);
+    migrateToAndroidDefaults(shared);
     dispatcher = std::make_unique<fcitx::EventDispatcher>();
     dispatcher->attach(&instance->eventLoop());
     fcitx_thread = std::thread([] { instance->eventLoop().exec(); });
     frontend = dynamic_cast<HarmonyFrontend *>(addonMgr.addon("harmonyfrontend"));
     ui = dynamic_cast<WebKeyboard *>(addonMgr.addon("webkeyboard"));
-    // Google Pinyin has no other input methods: globe and 中/英 only toggle these two.
-    setInputMethods({"keyboard-us", "pinyin"});
+    if (!hasProfile) {
+        // Like Google Pinyin: globe and 中/英 toggle these two. More can be added in settings.
+        setInputMethods({"keyboard-us", "pinyin"});
+    }
+    configSignature_ = configSignature(shared);
 }
 
 void focusIn(bool clientPreedit) {
@@ -302,42 +356,49 @@ void scroll(int start, int count) {
     with_fcitx([=] { ui->scroll(start, count); });
 }
 
-void save() {
-    with_fcitx([] { instance->save(); });
-}
-
-static void mergeRawConfig(RawConfig &to, const RawConfig &from) {
-    for (const auto &name : from.subItems()) {
-        auto item = from.get(name);
-        if (!item) {
+// Changes when the settings page writes any file of the config dir.
+size_t configSignature(const std::string &shared) {
+    size_t signature = 0;
+    std::error_code ec;
+    for (::fs::recursive_directory_iterator it(configHome(shared), ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) {
             continue;
         }
-        auto target = to.get(name, true);
-        if (item->subItemsSize() == 0) {
-            target->setValue(item->value());
-        } else {
-            mergeRawConfig(*target, *item);
-        }
+        auto time = it->last_write_time(ec).time_since_epoch().count();
+        signature = signature * 31 + std::hash<std::string>{}(it->path().string()) +
+                    std::hash<long long>{}(static_cast<long long>(time)) + it->file_size(ec);
     }
+    return signature;
 }
 
-void applyPinyinConfig(const std::string &path) {
-    with_fcitx([&path] {
-        std::ifstream in(path);
-        if (!in) {
-            return;
+
+bool reloadConfigIfChanged(const std::string &shared) {
+    auto signature = configSignature(shared);
+    if (signature == configSignature_) {
+        return false;
+    }
+    with_fcitx([] {
+        instance->reloadConfig();
+        auto &addonManager = instance->addonManager();
+        for (auto category : {AddonCategory::InputMethod, AddonCategory::Frontend, AddonCategory::Loader,
+                              AddonCategory::Module, AddonCategory::UI}) {
+            for (const auto &name : addonManager.addonNames(category)) {
+                if (auto *addon = addonManager.addon(name)) {
+                    addon->reloadConfig();
+                }
+            }
         }
-        RawConfig changes;
-        readFromIni(changes, in);
-        RawConfig config;
-        readAsIni(config, "conf/pinyin.conf");
-        mergeRawConfig(config, changes);
-        safeSaveAsIni(config, "conf/pinyin.conf");
-        // Only when loaded: otherwise it reads the config when loading.
-        if (auto *pinyin = instance->addonManager().addon("pinyin")) {
-            pinyin->reloadConfig();
-        }
+        instance->inputMethodManager().load();
     });
+    configSignature_ = signature;
+    return true;
+}
+
+void save(const std::string &shared) {
+    // Saving writes configs from memory: apply the settings page's changes first.
+    reloadConfigIfChanged(shared);
+    with_fcitx([] { instance->save(); });
+    configSignature_ = configSignature(shared);
 }
 
 std::string importGooglePinyinWords(const std::string &tsv) {

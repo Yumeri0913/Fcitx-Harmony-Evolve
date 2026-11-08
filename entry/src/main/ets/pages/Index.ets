@@ -7,7 +7,11 @@ import {
   ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath,
   fileMtime, readText, saveSettings, ThemeMode, userWordsSnapshotPath, VibrationStrength, writeText
 } from '../common/Settings';
-import { BoolOption, FUZZY_OPTIONS, GENERAL_OPTIONS, GOOGLE_PINYIN_FUZZY, PinyinConfig } from '../common/PinyinConfig';
+import { fcitxLocale } from '../common/Locale';
+import fcitx from 'libentry.so';
+import { AddonsPage } from './settings/AddonsPage';
+import { ConfigPage, ConfigPageParam } from './settings/ConfigPage';
+import { InputMethodsPage } from './settings/InputMethodsPage';
 
 const THEMES: ThemeMode[] = ['system', 'light', 'dark']
 const THEME_NAMES: string[] = ['跟随系统', '浅色', '深色']
@@ -48,39 +52,52 @@ struct Index {
   private context = this.getUIContext().getHostContext() as common.UIAbilityContext
   // Shared with the input method, see Settings.ets.
   private filesDir: string = this.context.distributedFilesDir
+  @Provide('settingsStack') stack: NavPathStack = new NavPathStack()
   @State settings: KeyboardSettings = loadSettings(this.filesDir)
   @State dictStatus: string = ''
-  @State generalValues: boolean[] = []
-  @State fuzzyValues: boolean[] = []
 
   aboutToAppear() {
-    this.loadPinyinConfig()
+    // A fcitx of its own for config descriptions; config files are shared with the keyboard.
+    fcitx.initSettings(this.context.bundleCodeDir, this.context.resourceDir, this.context.filesDir,
+      this.context.distributedFilesDir, fcitxLocale())
   }
 
   onPageShow() {
     this.settings = loadSettings(this.filesDir)
-    this.loadPinyinConfig()
     this.updateDictStatus()
   }
 
-  private loadPinyinConfig() {
-    const config = PinyinConfig.load(this.filesDir)
-    this.generalValues = GENERAL_OPTIONS.map((o: BoolOption) => config.getBool(o))
-    this.fuzzyValues = FUZZY_OPTIONS.map((o: BoolOption) => config.getBool(o))
+  private open(name: string, param?: ConfigPageParam) {
+    this.stack.pushPathByName(name, param ?? null)
   }
 
-  private setPinyinOptions(paths: string[], value: boolean) {
-    try {
-      const config = PinyinConfig.load(this.filesDir)
-      config.fillDefaults(GENERAL_OPTIONS)
-      for (const path of paths) {
-        config.setBool(path, value)
-      }
-      config.save(this.filesDir)
-    } catch (e) {
-      console.error(`Failed to save pinyin config: ${e}`)
+  @Builder
+  pageMap(name: string, param: Object) {
+    if (name === 'config') {
+      ConfigPage({ param: param as ConfigPageParam })
+    } else if (name === 'addons') {
+      AddonsPage()
+    } else if (name === 'inputMethods') {
+      InputMethodsPage()
     }
-    this.loadPinyinConfig()
+  }
+
+  @Builder
+  linkRow(label: string, detail: string, onClick: () => void) {
+    Row() {
+      Column() {
+        Text(label).fontSize(16)
+        if (detail) {
+          Text(detail).fontSize(13).fontColor($r('sys.color.font_secondary'))
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Text('›').fontSize(22).fontColor($r('sys.color.font_secondary'))
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+    .onClick(onClick)
   }
 
   private save() {
@@ -175,6 +192,7 @@ struct Index {
   }
 
   build() {
+    Navigation(this.stack) {
     Scroll() {
       Column() {
         Text('Fcitx5')
@@ -187,6 +205,12 @@ struct Index {
           .fontColor($r('sys.color.font_secondary'))
           .width('100%')
           .padding({ left: 16, right: 16, top: 8 })
+
+        this.sectionTitle('输入')
+        this.linkRow('输入法', '启用、排序和设置输入法', (): void => this.open('inputMethods'))
+        this.linkRow('拼音', '联想、模糊音、英文候选等', (): void => this.open('config', { uri: 'im/pinyin', title: '拼音' }))
+        this.linkRow('全局选项', '快捷键、行为', (): void => this.open('config', { uri: 'global', title: '全局选项' }))
+        this.linkRow('附加组件', '标点、快速输入、云拼音等', (): void => this.open('addons'))
 
         this.sectionTitle('外观')
         Row() {
@@ -225,38 +249,6 @@ struct Index {
         .width('100%')
         .padding({ left: 16, right: 16, top: 8, bottom: 8 })
 
-        this.sectionTitle('拼音')
-        ForEach(GENERAL_OPTIONS, (option: BoolOption, index: number) => {
-          this.toggleRow(option.label, this.generalValues[index] ?? option.defaultValue, (isOn: boolean) => {
-            this.setPinyinOptions([option.path], isOn)
-          })
-        }, (option: BoolOption, index: number) => `${option.path}-${this.generalValues[index]}`)
-
-        this.sectionTitle('模糊音')
-        Text('谷歌拼音打开模糊音后默认勾选前六组。修改后下次弹出键盘时生效。')
-          .fontSize(14)
-          .fontColor($r('sys.color.font_secondary'))
-          .width('100%')
-          .padding({ left: 16, right: 16 })
-        Row({ space: 12 }) {
-          Button('谷歌拼音默认').layoutWeight(1).onClick(() => {
-            const others = FUZZY_OPTIONS.map((o: BoolOption) => o.path)
-              .filter((path: string) => !GOOGLE_PINYIN_FUZZY.includes(path))
-            this.setPinyinOptions(others, false)
-            this.setPinyinOptions(GOOGLE_PINYIN_FUZZY, true)
-          })
-          Button('全部关闭').layoutWeight(1).onClick(() => {
-            this.setPinyinOptions(FUZZY_OPTIONS.map((o: BoolOption) => o.path), false)
-          })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 12, bottom: 4 })
-        ForEach(FUZZY_OPTIONS, (option: BoolOption, index: number) => {
-          this.toggleRow(option.label, this.fuzzyValues[index] ?? option.defaultValue, (isOn: boolean) => {
-            this.setPinyinOptions([option.path], isOn)
-          })
-        }, (option: BoolOption, index: number) => `${option.path}-${this.fuzzyValues[index]}`)
-
         this.sectionTitle('谷歌拼音用户词库')
         Text('在谷歌拼音中导出用户字典（user-dictionary.txt），再在这里导入。' +
           '导入的词与 Fcitx5 学到的词放在一起，会随日常输入继续调整顺序。')
@@ -287,6 +279,10 @@ struct Index {
     .width('100%')
     .height('100%')
     .align(Alignment.Top)
+    }
+    .navDestination(this.pageMap)
+    .mode(NavigationMode.Stack)
+    .hideTitleBar(true)
     .backgroundColor($r('sys.color.background_primary'))
   }
 }

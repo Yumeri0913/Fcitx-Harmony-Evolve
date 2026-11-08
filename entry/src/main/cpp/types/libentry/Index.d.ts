@@ -1,5 +1,6 @@
+// files is the private files dir, shared the dir shared by the app and the input method.
 // locale is like zh_CN.
-export const init: (bundle: string, resfile: string, files: string, locale: string) => void
+export const init: (bundle: string, resfile: string, files: string, shared: string, locale: string) => void
 export const setCallback: (callback: (data: string) => void) => void
 export const focusIn: (clientPreedit: boolean) => void
 export const focusOut: () => void
@@ -19,11 +20,23 @@ export const activateCandidateAction: (index: number, id: number) => void
 export const activateStatusAreaAction: (id: number) => void
 export const setCurrentInputMethod: (inputMethod: string) => void
 export const scroll: (start: number, count: number) => void
-export const save: () => void
-// Merge pinyin options written by the main app at path into fcitx's config and apply them.
-export const applyPinyinConfig: (path: string) => void
+// Saving writes configs from memory, so it first reloads config changed by the settings page.
+export const save: (shared: string) => void
+export const reloadConfigIfChanged: (shared: string) => void
 // Google Pinyin user words, lines of "word\tpin'yin\tcount".
 // Returns "added existing invalid", or "" when pinyin is unavailable.
 export const importGooglePinyinWords: (tsv: string) => string
 // All pinyin user words, same format.
 export const exportGooglePinyinWords: () => string
+
+// Settings for the main app, which runs its own fcitx on the shared config dir.
+export const initSettings: (bundle: string, resfile: string, files: string, shared: string, locale: string) => void
+// uri: "global", "addon/<name>", "addon/<name>/<sub config>" or "im/<name>".
+// Returns {cfg, desc} as RawConfig JSON ({name, value, subItems}), or "" if not configurable.
+export const getConfig: (uri: string) => string
+export const setConfig: (uri: string, value: string) => void
+export const getAddons: () => string
+export const setAddonState: (name: string, enabled: boolean) => void
+export const availableInputMethods: () => string
+export const enabledInputMethods: () => string
+export const setEnabledInputMethods: (names: string) => void

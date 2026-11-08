@@ -1,15 +1,17 @@
 #include <string>
 
 #include "fcitx.h"
+#include "settings.h"
 #include "napihelper.h"
 
 API(init) {
-    GET_ARGS(4)
+    GET_ARGS(5)
     GET_STRING(bundle, 0)
     GET_STRING(resfile, 1)
     GET_STRING(files, 2)
-    GET_STRING(locale, 3)
-    fcitx::init(bundle, resfile, files, locale);
+    GET_STRING(shared, 3)
+    GET_STRING(locale, 4)
+    fcitx::init(bundle, resfile, files, shared, locale);
     return {};
 }
 
@@ -99,14 +101,72 @@ API(scroll) {
 }
 
 API(save) {
-    fcitx::save();
+    GET_ARGS(1)
+    GET_STRING(shared, 0)
+    fcitx::save(shared);
     return {};
 }
 
-API(applyPinyinConfig) {
+API(reloadConfigIfChanged) {
     GET_ARGS(1)
-    GET_STRING(path, 0)
-    fcitx::applyPinyinConfig(path);
+    GET_STRING(shared, 0)
+    fcitx::reloadConfigIfChanged(shared);
+    return {};
+}
+
+API(initSettings) {
+    GET_ARGS(5)
+    GET_STRING(bundle, 0)
+    GET_STRING(resfile, 1)
+    GET_STRING(files, 2)
+    GET_STRING(shared, 3)
+    GET_STRING(locale, 4)
+    fcitx::initSettings(bundle, resfile, files, shared, locale);
+    return {};
+}
+
+API(getConfig) {
+    GET_ARGS(1)
+    GET_STRING(uri, 0)
+    STRING(ret, fcitx::getConfig(uri))
+    return ret;
+}
+
+API(setConfig) {
+    GET_ARGS(2)
+    GET_STRING(uri, 0)
+    GET_STRING(value, 1)
+    fcitx::setConfig(uri, value);
+    return {};
+}
+
+API(getAddons) {
+    STRING(ret, fcitx::getAddons())
+    return ret;
+}
+
+API(setAddonState) {
+    GET_ARGS(2)
+    GET_STRING(name, 0)
+    GET_BOOL(enabled, 1)
+    fcitx::setAddonState(name, enabled);
+    return {};
+}
+
+API(availableInputMethods) {
+    STRING(ret, fcitx::availableInputMethods())
+    return ret;
+}
+
+API(enabledInputMethods) {
+    STRING(ret, fcitx::enabledInputMethods())
+    return ret;
+}
+
+API(setEnabledInputMethods) {
+    GET_ARGS(1)
+    GET_STRING(names, 0)
+    fcitx::setEnabledInputMethods(names);
     return {};
 }
 
@@ -160,7 +220,15 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"activateCandidateAction", nullptr, activateCandidateAction, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"scroll", nullptr, scroll, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"save", nullptr, save, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"applyPinyinConfig", nullptr, applyPinyinConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"reloadConfigIfChanged", nullptr, reloadConfigIfChanged, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"initSettings", nullptr, initSettings, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getConfig", nullptr, getConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setConfig", nullptr, setConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getAddons", nullptr, getAddons, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setAddonState", nullptr, setAddonState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"availableInputMethods", nullptr, availableInputMethods, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"enabledInputMethods", nullptr, enabledInputMethods, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setEnabledInputMethods", nullptr, setEnabledInputMethods, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"importGooglePinyinWords", nullptr, importGooglePinyinWords, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"exportGooglePinyinWords", nullptr, exportGooglePinyinWords, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setCurrentInputMethod", nullptr, setCurrentInputMethod, nullptr, nullptr, nullptr, napi_default, nullptr},
