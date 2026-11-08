@@ -1117,7 +1117,7 @@ index 4b77d0f..40471fb 100644
    }
    return toolbar
 diff --git a/src/ux.ts b/src/ux.ts
-index 892f0e9..fdfb35e 100644
+index 892f0e9..10099b1 100644
 --- a/src/ux.ts
 +++ b/src/ux.ts
 @@ -12,7 +12,7 @@ import { renderRow } from './key'
@@ -1233,7 +1233,8 @@ index 892f0e9..fdfb35e 100644
 +    // Long press space picks an input method, like fcitx5-android.
 +    hidePopover()
      showContextmenu(container, inputMethods_.map(inputMethod => ({
-       text: inputMethod.displayName,
+-      text: inputMethod.displayName,
++      text: spaceLabel(inputMethod),
        callback() { sendEvent({ type: 'SET_INPUT_METHOD', data: inputMethod.name }) },
      })))
    }
