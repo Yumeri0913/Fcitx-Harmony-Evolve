@@ -40,10 +40,10 @@ index 0000000..1cb8fed
 +  lmdb: false
 +  msgpackr-extract: false
 diff --git a/src/api.d.ts b/src/api.d.ts
-index 23fc6d3..f8013b0 100644
+index 23fc6d3..9691ba8 100644
 --- a/src/api.d.ts
 +++ b/src/api.d.ts
-@@ -23,6 +23,13 @@ export interface CandidateAction {
+@@ -23,6 +23,19 @@ export interface CandidateAction {
    text: string
  }
  
@@ -54,48 +54,485 @@ index 23fc6d3..f8013b0 100644
 +  keyBorder: boolean
 +}
 +
++export interface ClipboardEntry {
++  id: number
++  text: string
++  pinned: boolean
++}
++
  export const SCROLL_NONE = 0
  export const SCROLL_READY = 1
  export const SCROLLING = 2
-@@ -62,6 +69,9 @@ export type SystemEvent = {
+@@ -62,6 +75,12 @@ export type SystemEvent = {
  } | {
    type: 'STATUS_AREA'
    data: StatusAreaAction[]
 +} | {
 +  type: 'CONFIG'
 +  data: KeyboardConfig
++} | {
++  type: 'CLIPBOARD'
++  data: ClipboardEntry[]
  } | {
    type: 'INPUT_METHODS'
    data: {
-@@ -81,7 +91,7 @@ export type VirtualKeyboardEvent = {
+@@ -81,10 +100,20 @@ export type VirtualKeyboardEvent = {
    data: string
  } | {
    type: 'UNDO' | 'REDO' | 'CUT' | 'COPY' | 'PASTE' | 'COLLAPSE'
 -    | 'SELECT' | 'DESELECT' | 'SELECT_ALL' | 'GLOBE'
 +    | 'SELECT' | 'DESELECT' | 'SELECT_ALL' | 'GLOBE' | 'HAPTIC'
++    // Clipboard panel shown or hidden; the host overlays a system paste button.
++    | 'CLIPBOARD_SHOW' | 'CLIPBOARD_HIDE' | 'CLIPBOARD_CLEAR'
++    // fcitx quick phrase and unicode input, from the comma key menu.
++    | 'QUICKPHRASE' | 'UNICODE'
  } | {
-   type: 'SELECT_CANDIDATE' | 'ASK_CANDIDATE_ACTIONS' | 'STATUS_AREA_ACTION'
+-  type: 'SELECT_CANDIDATE' | 'ASK_CANDIDATE_ACTIONS' | 'STATUS_AREA_ACTION'
++  type: 'SELECT_CANDIDATE' | 'ASK_CANDIDATE_ACTIONS' | 'STATUS_AREA_ACTION' | 'CLIPBOARD_DELETE'
    data: number
++} | {
++  type: 'CLIPBOARD_PIN'
++  data: {
++    id: number
++    pinned: boolean
++  }
+ } | {
+   type: 'CANDIDATE_ACTION'
+   data: {
+diff --git a/src/clipboard.ts b/src/clipboard.ts
+new file mode 100644
+index 0000000..d11d69b
+--- /dev/null
++++ b/src/clipboard.ts
+@@ -0,0 +1,97 @@
++import type { ClipboardEntry } from './api'
++import { showContextmenu } from './contextmenu'
++import { popDisplayModeStack } from './display'
++import { div, enableScroll, handleClick } from './util'
++import { LONG_PRESS_THRESHOLD, sendEvent } from './ux'
++
++// Clipboard history like fcitx5-android's clipboard window: pinned entries first, tap to
++// paste, long press to pin or delete. The host keeps the history and overlays a system
++// paste button on the left of the header, which HarmonyOS needs to read the clipboard.
++
++function isChinese() {
++  return navigator.language.startsWith('zh')
++}
++
++function renderEntry(entry: ClipboardEntry) {
++  const item = div('fcitx-keyboard-clipboard-entry')
++  if (entry.pinned) {
++    item.classList.add('fcitx-keyboard-clipboard-pinned')
++  }
++  const text = div('fcitx-keyboard-clipboard-text')
++  text.textContent = entry.text
++  item.appendChild(text)
++
++  let timer: number | null = null
++  let longPressed = false
++  item.addEventListener('touchstart', () => {
++    longPressed = false
++    timer = window.setTimeout(() => {
++      timer = null
++      longPressed = true
++      const zh = isChinese()
++      showContextmenu(item, [
++        {
++          text: entry.pinned ? (zh ? '取消置顶' : 'Unpin') : (zh ? '置顶' : 'Pin'),
++          callback() { sendEvent({ type: 'CLIPBOARD_PIN', data: { id: entry.id, pinned: !entry.pinned } }) },
++        },
++        {
++          text: zh ? '删除' : 'Delete',
++          callback() { sendEvent({ type: 'CLIPBOARD_DELETE', data: entry.id }) },
++        },
++      ])
++    }, LONG_PRESS_THRESHOLD)
++  })
++  const cancel = () => {
++    if (timer) {
++      clearTimeout(timer)
++      timer = null
++    }
++  }
++  item.addEventListener('touchmove', cancel)
++  item.addEventListener('touchend', cancel)
++  item.addEventListener('touchcancel', cancel)
++  handleClick(item, () => {
++    if (!longPressed) {
++      sendEvent({ type: 'COMMIT', data: entry.text })
++    }
++  })
++  return item
++}
++
++export function setClipboard(entries: ClipboardEntry[]) {
++  const list = document.querySelector('.fcitx-keyboard-clipboard-list') as HTMLElement
++  list.innerHTML = ''
++  if (entries.length === 0) {
++    const empty = div('fcitx-keyboard-clipboard-empty')
++    empty.textContent = isChinese()
++      ? '用键盘的编辑面板复制或剪切的文字会出现在这里。点左上角的粘贴按钮可以加入系统剪贴板的内容。'
++      : 'Text copied or cut with the keyboard\'s editing panel appears here. Tap paste to add the system clipboard.'
++    list.appendChild(empty)
++    return
++  }
++  const sorted = [...entries.filter(e => e.pinned), ...entries.filter(e => !e.pinned)]
++  for (const entry of sorted) {
++    list.appendChild(renderEntry(entry))
++  }
++}
++
++export function renderClipboard() {
++  const zh = isChinese()
++  const clipboard = div('fcitx-keyboard-clipboard')
++  const header = div('fcitx-keyboard-clipboard-header')
++  // Left part is covered by the host's system paste button.
++  header.appendChild(div('fcitx-keyboard-clipboard-paste-slot'))
++  const clear = div('fcitx-keyboard-clipboard-button')
++  clear.textContent = zh ? '清空' : 'Clear'
++  handleClick(clear, () => sendEvent({ type: 'CLIPBOARD_CLEAR' }))
++  const back = div('fcitx-keyboard-clipboard-button')
++  back.textContent = zh ? '返回' : 'Back'
++  handleClick(back, () => popDisplayModeStack())
++  header.appendChild(clear)
++  header.appendChild(back)
++  const list = div('fcitx-keyboard-clipboard-list')
++  enableScroll(list)
++  clipboard.appendChild(header)
++  clipboard.appendChild(list)
++  return clipboard
++}
 diff --git a/src/display.ts b/src/display.ts
-index 514fcda..df59abf 100644
+index 514fcda..cfc0460 100644
 --- a/src/display.ts
 +++ b/src/display.ts
-@@ -66,9 +66,10 @@ export function setDisplayMode(mode: DisplayMode) {
-       hide(symbolSelector)
-       break
-     case 'symbol':
+@@ -1,79 +1,65 @@
+ import { collapse } from './candidates'
++import { selectEmojiCategory } from './emoji'
+ import { selectCategory } from './symbol'
+-import { getCandidateBar, getStatusArea, getSymbolSelector, hide, release, show } from './util'
++import { hide, release, show } from './util'
++import { sendEvent } from './ux'
+ 
+-export type DisplayMode = 'initial' | 'candidates' | 'edit' | 'statusArea' | 'symbol'
++export type DisplayMode = 'initial' | 'candidates' | 'edit' | 'statusArea' | 'symbol' | 'emoji' | 'clipboard'
+ 
+ const displayModeStack: DisplayMode[] = ['initial']
++// Not the stack top: popDisplayModeStack pops before switching.
++let currentMode: DisplayMode = 'initial'
+ 
+-export function setDisplayMode(mode: DisplayMode) {
+-  const toolbar = document.querySelector('.fcitx-keyboard-toolbar') as HTMLElement
+-  const candidateBar = getCandidateBar()
+-  const returnBar = document.querySelector('.fcitx-keyboard-return-bar') as HTMLElement
+-  const keyboard = document.querySelector('.fcitx-keyboard') as HTMLElement
+-  const editor = document.querySelector('.fcitx-keyboard-editor') as HTMLElement
+-  const statusArea = getStatusArea()
+-  const symbolSelector = getSymbolSelector()
++// Bar on top and frame below for each mode.
++const layout: Record<DisplayMode, [string, string]> = {
++  initial: ['toolbar', 'keyboard'],
++  candidates: ['candidate-bar', 'keyboard'],
++  edit: ['return-bar', 'editor'],
++  statusArea: ['return-bar', 'status-area'],
++  // The symbol, emoji and clipboard panels have their own back buttons.
++  symbol: ['toolbar', 'symbol-selector'],
++  emoji: ['toolbar', 'emoji-picker'],
++  clipboard: ['toolbar', 'clipboard'],
++}
+ 
+-  function showSymbolSelector() {
+-    show(symbolSelector)
+-    selectCategory(0)
+-  }
++const bars = ['toolbar', 'candidate-bar', 'return-bar']
++const frames = ['keyboard', 'editor', 'status-area', 'symbol-selector', 'emoji-picker', 'clipboard']
++
++function element(name: string) {
++  return document.querySelector(name === 'keyboard' ? '.fcitx-keyboard' : `.fcitx-keyboard-${name}`) as HTMLElement
++}
++
++export function getDisplayMode() {
++  return currentMode
++}
+ 
+-  function hideKeyboard() {
++export function setDisplayMode(mode: DisplayMode) {
++  const previous = currentMode
++  currentMode = mode
++  const keyboard = element('keyboard')
++  if (layout[mode][1] !== 'keyboard') {
+     // Clicking symbol when other keys are pressed.
+     for (const container of keyboard.querySelectorAll('.fcitx-keyboard-key-container.fcitx-keyboard-pressed')) {
+       release(container)
+     }
+-    hide(keyboard)
+   }
+-
+-  switch (mode) {
+-    case 'initial':
+-      show(toolbar)
+-      hide(candidateBar)
+-      hide(returnBar)
+-      show(keyboard)
+-      hide(editor)
+-      hide(statusArea)
+-      hide(symbolSelector)
+-      break
+-    case 'candidates':
 -      hide(toolbar)
-+      // The symbol board has its own back button in the bottom row.
-+      show(toolbar)
-       hide(candidateBar)
+-      show(candidateBar)
+-      hide(returnBar)
+-      show(keyboard)
+-      hide(editor)
+-      hide(statusArea)
+-      hide(symbolSelector)
+-      break
+-    case 'edit':
+-      hide(toolbar)
+-      hide(candidateBar)
 -      show(returnBar)
-+      hide(returnBar)
-       hideKeyboard()
-       hide(editor)
-       hide(statusArea)
+-      hideKeyboard()
+-      show(editor)
+-      hide(statusArea)
+-      hide(symbolSelector)
+-      break
+-    case 'statusArea':
+-      hide(toolbar)
+-      hide(candidateBar)
+-      show(returnBar)
+-      hideKeyboard()
+-      hide(editor)
+-      show(statusArea)
+-      hide(symbolSelector)
+-      break
+-    case 'symbol':
+-      hide(toolbar)
+-      hide(candidateBar)
+-      show(returnBar)
+-      hideKeyboard()
+-      hide(editor)
+-      hide(statusArea)
+-      showSymbolSelector()
+-      break
++  for (const bar of bars) {
++    bar === layout[mode][0] ? show(element(bar)) : hide(element(bar))
++  }
++  for (const frame of frames) {
++    frame === layout[mode][1] ? show(element(frame)) : hide(element(frame))
++  }
++  if (mode === 'symbol') {
++    selectCategory(0)
++  }
++  else if (mode === 'emoji') {
++    selectEmojiCategory(-1)
++  }
++  if (mode === 'clipboard' && previous !== 'clipboard') {
++    sendEvent({ type: 'CLIPBOARD_SHOW' })
++  }
++  else if (mode !== 'clipboard' && previous === 'clipboard') {
++    sendEvent({ type: 'CLIPBOARD_HIDE' })
+   }
+   if (mode === 'initial') {
+     displayModeStack.splice(0, displayModeStack.length, 'initial')
+diff --git a/src/editor.ts b/src/editor.ts
+index 2893315..331873c 100644
+--- a/src/editor.ts
++++ b/src/editor.ts
+@@ -1,7 +1,7 @@
+ import Backspace from 'bundle-text:../svg/backspace.svg'
+ import ChevronLeft from 'bundle-text:../svg/chevron-left.svg'
+ import FirstPage from 'bundle-text:../svg/first-page.svg'
+-import { div, handleClick, press, release, setSvgStyle } from './util'
++import { div, handleClick, press, release, setSvgStyle, tr } from './util'
+ import { backspace, sendEvent, sendKeyDown } from './ux'
+ 
+ let selecting = false
+@@ -14,7 +14,7 @@ function adjustSelectAllOrCut() {
+     return
+   }
+   // Harmony doesn't have a way to report whether selection is empty, so can't be used to decide button state.
+-  button.innerHTML = selecting ? 'Cut' : 'Select all'
++  button.innerHTML = selecting ? tr('Cut', '剪切') : tr('Select all', '全选')
+ }
+ 
+ export function select() {
+@@ -29,7 +29,7 @@ export function deselect() {
+   adjustSelectAllOrCut()
+ }
+ 
+-function renderEditorButton(label: string, gridArea: string) {
++function renderEditorButton(label: string, gridArea: string, toggle = false) {
+   const container = div('fcitx-keyboard-editor-button-container')
+   const button = div('fcitx-keyboard-editor-button')
+   const isFunctional = Number(gridArea.split(' / ')[1]) === 7
+@@ -37,7 +37,7 @@ function renderEditorButton(label: string, gridArea: string) {
+   button.innerHTML = label
+   container.style.gridArea = gridArea
+   container.appendChild(button)
+-  if (label !== 'Select') {
++  if (!toggle) {
+     container.addEventListener('touchstart', () => press(container))
+     container.addEventListener('touchend', () => release(container))
+     container.addEventListener('touchcancel', () => release(container))
+@@ -64,20 +64,20 @@ export function renderEditor() {
+   setSvgStyle(downButton, { transform: 'rotate(270deg)' })
+   handleClick(downButton, () => sendKeyDown('', 'ArrowDown'))
+ 
+-  selectButton = renderEditorButton('Select', '2 / 3 / 3 / 5')
++  selectButton = renderEditorButton(tr('Select', '选择'), '2 / 3 / 3 / 5', true)
+   selectButton.addEventListener('touchstart', () => {
+     sendEvent({ type: selecting ? 'DESELECT' : 'SELECT' })
+     selecting ? deselect() : select()
+   })
+ 
+-  selectAllOrCutButton = renderEditorButton('Cut', '1 / 7 / 2 / 9')
++  selectAllOrCutButton = renderEditorButton(tr('Cut', '剪切'), '1 / 7 / 2 / 9')
+   handleClick(selectAllOrCutButton, () => sendEvent({ type: selecting ? 'CUT' : 'SELECT_ALL' }))
+   adjustSelectAllOrCut()
+ 
+-  const copyButton = renderEditorButton('Copy', '2 / 7 / 3 / 9')
++  const copyButton = renderEditorButton(tr('Copy', '复制'), '2 / 7 / 3 / 9')
+   handleClick(copyButton, () => sendEvent({ type: 'COPY' }))
+ 
+-  const pasteButton = renderEditorButton('Paste', '3 / 7 / 4 / 9')
++  const pasteButton = renderEditorButton(tr('Paste', '粘贴'), '3 / 7 / 4 / 9')
+   handleClick(pasteButton, () => sendEvent({ type: 'PASTE' }))
+ 
+   const bsButton = renderEditorButton(Backspace, '4 / 7 / 5 / 9')
+diff --git a/src/emoji.ts b/src/emoji.ts
+new file mode 100644
+index 0000000..999bcf4
+--- /dev/null
++++ b/src/emoji.ts
+@@ -0,0 +1,107 @@
++import type { PickerCategory } from './emojiData'
++import { popDisplayModeStack } from './display'
++import { emojiCategories, emoticonCategories } from './emojiData'
++import { div, enableScroll, handleClick, press, release } from './util'
++import { backspace, sendEvent } from './ux'
++
++// Emoji and emoticon (颜文字) picker like fcitx5-android's PickerWindow: a grid of the
++// current category, and a bottom row with back, category tabs, kind switch and backspace.
++
++const RECENT_KEY = 'fcitx-keyboard-recent-emoji'
++const RECENT_LIMIT = 32
++
++let emoticon = false
++let recent: string[] = loadRecent()
++
++function loadRecent(): string[] {
++  try {
++    const saved = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as unknown
++    return Array.isArray(saved) ? saved.filter(item => typeof item === 'string') : []
++  }
++  catch {
++    return []
++  }
++}
++
++function addRecent(text: string) {
++  recent = [text, ...recent.filter(item => item !== text)].slice(0, RECENT_LIMIT)
++  try {
++    localStorage.setItem(RECENT_KEY, JSON.stringify(recent))
++  }
++  catch {
++    // Recently used is a convenience.
++  }
++}
++
++// Recently used comes first, like fcitx5-android.
++function categories(): PickerCategory[] {
++  return [{ label: '⟳', items: recent }, ...(emoticon ? emoticonCategories : emojiCategories)]
++}
++
++function renderTabs() {
++  const tabs = document.querySelector('.fcitx-keyboard-emoji-tabs') as HTMLElement
++  tabs.innerHTML = ''
++  categories().forEach((category, i) => {
++    const tab = div('fcitx-keyboard-emoji-tab')
++    tab.textContent = category.label
++    handleClick(tab, () => selectEmojiCategory(i))
++    tabs.appendChild(tab)
++  })
++  const kind = document.querySelector('.fcitx-keyboard-emoji-kind') as HTMLElement
++  kind.textContent = emoticon ? '😀' : '^_^'
++}
++
++// index -1: recently used if any, otherwise the first category.
++export function selectEmojiCategory(index: number) {
++  renderTabs()
++  const all = categories()
++  if (index < 0) {
++    index = recent.length > 0 ? 0 : 1
++  }
++  const grid = document.querySelector('.fcitx-keyboard-emoji-grid') as HTMLElement
++  grid.classList.toggle('fcitx-keyboard-emoticon-grid', emoticon)
++  grid.innerHTML = ''
++  grid.scroll({ top: 0 })
++  for (const text of all[index].items) {
++    const item = div('fcitx-keyboard-emoji-item')
++    item.textContent = text
++    handleClick(item, () => {
++      sendEvent({ type: 'COMMIT', data: text })
++      addRecent(text)
++    })
++    grid.appendChild(item)
++  }
++  document.querySelectorAll('.fcitx-keyboard-emoji-tab').forEach((tab, i) => {
++    i === index ? press(tab) : release(tab)
++    if (i === index) {
++      tab.scrollIntoView({ block: 'nearest', inline: 'nearest' })
++    }
++  })
++}
++
++function renderButton(klass: string, label: string, handler: () => void) {
++  const button = div('fcitx-keyboard-emoji-button')
++  button.classList.add(klass)
++  button.textContent = label
++  handleClick(button, handler)
++  return button
++}
++
++export function renderEmojiPicker() {
++  const picker = div('fcitx-keyboard-emoji-picker')
++  const grid = div('fcitx-keyboard-emoji-grid')
++  enableScroll(grid)
++  const bottom = div('fcitx-keyboard-emoji-bottom')
++  const tabs = div('fcitx-keyboard-emoji-tabs')
++  enableScroll(tabs)
++  bottom.appendChild(renderButton('fcitx-keyboard-emoji-back', 'ABC', () => popDisplayModeStack()))
++  bottom.appendChild(tabs)
++  bottom.appendChild(renderButton('fcitx-keyboard-emoji-kind', '^_^', () => {
++    emoticon = !emoticon
++    selectEmojiCategory(1)
++  }))
++  bottom.appendChild(renderButton('fcitx-keyboard-emoji-backspace', '⌫', () => backspace()))
++  picker.appendChild(grid)
++  picker.appendChild(bottom)
++  return picker
++}
+diff --git a/src/emojiData.ts b/src/emojiData.ts
+new file mode 100644
+index 0000000..a019a2d
+--- /dev/null
++++ b/src/emojiData.ts
+@@ -0,0 +1,11 @@
++// Generated from fcitx5-android PickerData.kt (LGPL-2.1-or-later).
++// Copyright 2021-2025 Fcitx5 for Android Contributors
++
++export interface PickerCategory {
++  label: string
++  items: string[]
++}
++
++export const emojiCategories: PickerCategory[] = [{ label: '🙂', items: ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '🫠', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '☺️', '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🫢', '🫣', '🤫', '🤔', '🫡', '🤐', '🤨', '😐', '😑', '😶', '🫥', '😶‍🌫️', '😏', '😒', '🙄', '😬', '😮‍💨', '🤥', '😌', '😔', '🙂‍↕️', '🙂‍↔️', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '😵‍💫', '🫨', '🫩', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '🫤', '😟', '🙁', '☹️', '😮', '😯', '😲', '😳', '🥺', '🥹', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾', '🙈', '🙉', '🙊', '💋', '💌', '💘', '💝', '💖', '💗', '💓', '💞', '💕', '💟', '❣️', '💔', '❤️‍🔥', '❤️‍🩹', '❤️', '🧡', '💛', '💚', '💙', '💜', '🤎', '🖤', '🤍', '🩷', '🩵', '🩶', '💯', '💢', '💥', '💫', '💦', '💨', '🕳️', '💣', '💬', '👁️‍🗨️', '🗨️', '🗯️', '💭', '💤'] }, { label: '🧑', items: ['👋', '🤚', '🖐️', '✋', '🖖', '🫱', '🫲', '🫸', '🫷', '🫳', '🫴', '👌', '🤌', '🤏', '✌️', '🤞', '🫰', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '🫵', '👍', '👎', '✊', '👊', '🤛', '🤜', '👏', '🙌', '🫶', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🫀', '🫁', '🦷', '🦴', '👀', '👁️', '👅', '👄', '🫦', '👶', '🧒', '👦', '👧', '🧑', '👱', '👨', '🧔', '🧔‍♂️', '🧔‍♀️', '👨‍🦰', '👨‍🦱', '👨‍🦳', '👨‍🦲', '👩', '👩‍🦰', '🧑‍🦰', '👩‍🦱', '🧑‍🦱', '👩‍🦳', '🧑‍🦳', '👩‍🦲', '🧑‍🦲', '👱‍♀️', '👱‍♂️', '🧓', '👴', '👵', '🙍', '🙍‍♂️', '🙍‍♀️', '🙎', '🙎‍♂️', '🙎‍♀️', '🙅', '🙅‍♂️', '🙅‍♀️', '🙆', '🙆‍♂️', '🙆‍♀️', '💁', '💁‍♂️', '💁‍♀️', '🙋', '🙋‍♂️', '🙋‍♀️', '🧏', '🧏‍♂️', '🧏‍♀️', '🙇', '🙇‍♂️', '🙇‍♀️', '🤦', '🤦‍♂️', '🤦‍♀️', '🤷', '🤷‍♂️', '🤷‍♀️', '🧑‍⚕️', '👨‍⚕️', '👩‍⚕️', '🧑‍🎓', '👨‍🎓', '👩‍🎓', '🧑‍🏫', '👨‍🏫', '👩‍🏫', '🧑‍⚖️', '👨‍⚖️', '👩‍⚖️', '🧑‍🌾', '👨‍🌾', '👩‍🌾', '🧑‍🍳', '👨‍🍳', '👩‍🍳', '🧑‍🔧', '👨‍🔧', '👩‍🔧', '🧑‍🏭', '👨‍🏭', '👩‍🏭', '🧑‍💼', '👨‍💼', '👩‍💼', '🧑‍🔬', '👨‍🔬', '👩‍🔬', '🧑‍💻', '👨‍💻', '👩‍💻', '🧑‍🎤', '👨‍🎤', '👩‍🎤', '🧑‍🎨', '👨‍🎨', '👩‍🎨', '🧑‍✈️', '👨‍✈️', '👩‍✈️', '🧑‍🚀', '👨‍🚀', '👩‍🚀', '🧑‍🚒', '👨‍🚒', '👩‍🚒', '👮', '👮‍♂️', '👮‍♀️', '🕵️', '🕵️‍♂️', '🕵️‍♀️', '💂', '💂‍♂️', '💂‍♀️', '🥷', '👷', '👷‍♂️', '👷‍♀️', '🫅', '🤴', '👸', '👳', '👳‍♂️', '👳‍♀️', '👲', '🧕', '🤵', '🤵‍♂️', '🤵‍♀️', '👰', '👰‍♂️', '👰‍♀️', '🤰', '🫃', '🫄', '🤱', '👩‍🍼', '👨‍🍼', '🧑‍🍼', '👼', '🎅', '🤶', '🧑‍🎄', '🦸', '🦸‍♂️', '🦸‍♀️', '🦹', '🦹‍♂️', '🦹‍♀️', '🧙', '🧙‍♂️', '🧙‍♀️', '🧚', '🧚‍♂️', '🧚‍♀️', '🧛', '🧛‍♂️', '🧛‍♀️', '🧜', '🧜‍♂️', '🧜‍♀️', '🧝', '🧝‍♂️', '🧝‍♀️', '🧞', '🧞‍♂️', '🧞‍♀️', '🧟', '🧟‍♂️', '🧟‍♀️', '🧌', '💆', '💆‍♂️', '💆‍♀️', '💇', '💇‍♂️', '💇‍♀️', '🚶', '🚶‍♂️', '🚶‍♀️', '🚶‍➡️', '🚶‍♀️‍➡️', '🚶‍♂️‍➡️', '🧍', '🧍‍♂️', '🧍‍♀️', '🧎', '🧎‍♂️', '🧎‍♀️', '🧎‍➡️', '🧎‍♀️‍➡️', '🧎‍♂️‍➡️', '🧑‍🦯', '👨‍🦯', '👩‍🦯', '🧑‍🦯‍➡️', '👨‍🦯‍➡️', '👩‍🦯‍➡️', '🧑‍🦽', '👨‍🦽', '👩‍🦽', '🧑‍🦽‍➡️', '👨‍🦽‍➡️', '👩‍🦽‍➡️', '🧑‍🦼', '👨‍🦼', '👩‍🦼', '🧑‍🦼‍➡️', '👨‍🦼‍➡️', '👩‍🦼‍➡️', '🏃', '🏃‍♂️', '🏃‍♀️', '🏃‍➡️', '🏃‍♂️‍➡️', '🏃‍♀️‍➡️', '💃', '🕺', '🕴️', '👯', '👯‍♂️', '👯‍♀️', '🧖', '🧖‍♂️', '🧖‍♀️', '🧗', '🧗‍♂️', '🧗‍♀️', '🤺', '🏇', '⛷️', '🏂', '🏌️', '🏌️‍♂️', '🏌️‍♀️', '🏄', '🏄‍♂️', '🏄‍♀️', '🚣', '🚣‍♂️', '🚣‍♀️', '🏊', '🏊‍♂️', '🏊‍♀️', '⛹️', '⛹️‍♂️', '⛹️‍♀️', '🏋️', '🏋️‍♂️', '🏋️‍♀️', '🚴', '🚴‍♂️', '🚴‍♀️', '🚵', '🚵‍♂️', '🚵‍♀️', '🤸', '🤸‍♂️', '🤸‍♀️', '🤼', '🤼‍♂️', '🤼‍♀️', '🤽', '🤽‍♂️', '🤽‍♀️', '🤾', '🤾‍♂️', '🤾‍♀️', '🤹', '🤹‍♂️', '🤹‍♀️', '🧘', '🧘‍♂️', '🧘‍♀️', '🛀', '🛌', '🧑‍🤝‍🧑', '👭', '👫', '👬', '💏', '👩‍❤️‍💋‍👨', '👨‍❤️‍💋‍👨', '👩‍❤️‍💋‍👩', '💑', '👩‍❤️‍👨', '👨‍❤️‍👨', '👩‍❤️‍👩', '👪', '👨‍👩‍👦', '👨‍👩‍👧', '👨‍👩‍👧‍👦', '👨‍👩‍👦‍👦', '👨‍👩‍👧‍👧', '👨‍👨‍👦', '👨‍👨‍👧', '👨‍👨‍👧‍👦', '👨‍👨‍👦‍👦', '👨‍👨‍👧‍👧', '👩‍👩‍👦', '👩‍👩‍👧', '👩‍👩‍👧‍👦', '👩‍👩‍👦‍👦', '👩‍👩‍👧‍👧', '👨‍👦', '👨‍👦‍👦', '👨‍👧', '👨‍👧‍👦', '👨‍👧‍👧', '👩‍👦', '👩‍👦‍👦', '👩‍👧', '👩‍👧‍👦', '👩‍👧‍👧', '🧑‍🧑‍🧒', '🧑‍🧑‍🧒‍🧒', '🧑‍🧒', '🧑‍🧒‍🧒', '🗣️', '👤', '👥', '🫂', '👣'] }, { label: '🌸', items: ['🐵', '🐒', '🦍', '🦧', '🐶', '🐕', '🦮', '🐕‍🦺', '🐩', '🐺', '🦊', '🦝', '🐱', '🐈', '🐈‍⬛', '🦁', '🐯', '🐅', '🐆', '🐴', '🐎', '🦄', '🦓', '🦌', '🦬', '🐮', '🐂', '🐃', '🐄', '🐷', '🐖', '🐗', '🐽', '🐏', '🐑', '🐐', '🐪', '🐫', '🦙', '🦒', '🐘', '🦣', '🦏', '🦛', '🐭', '🐁', '🐀', '🐹', '🐰', '🐇', '🐿️', '🦫', '🦔', '🦇', '🐻', '🐻‍❄️', '🐨', '🐼', '🫎', '🫏', '🦥', '🦦', '🦨', '🦘', '🦡', '🐾', '🦃', '🐔', '🐓', '🐣', '🐤', '🐥', '🐦', '🐦‍⬛', '🐧', '🕊️', '🦅', '🦆', '🦢', '🦉', '🦤', '🪿', '🪽', '🪶', '🦩', '🦚', '🐦‍🔥', '🦜', '🐸', '🐊', '🐢', '🦎', '🐍', '🐲', '🐉', '🦕', '🦖', '🐳', '🐋', '🐬', '🦭', '🐟', '🐠', '🐡', '🦈', '🐙', '🪼', '🐚', '🪸', '🐌', '🦋', '🐛', '🐜', '🐝', '🪲', '🐞', '🦗', '🪳', '🕷️', '🕸️', '🦂', '🦟', '🪰', '🪱', '🦠', '💐', '🌸', '💮', '🪷', '🏵️', '🌹', '🥀', '🌺', '🌻', '🌼', '🌷', '🪻', '🌱', '🪴', '🌲', '🌳', '🌴', '🪾', '🌵', '🌾', '🌿', '☘️', '🍀', '🍁', '🍂', '🍃', '🪹', '🪺'] }, { label: '🎂', items: ['🍇', '🍈', '🍉', '🍊', '🍋', '🍋‍🟩', '🍌', '🍍', '🥭', '🍎', '🍏', '🍐', '🍑', '🍒', '🍓', '🫐', '🥝', '🍅', '🫒', '🥥', '🥑', '🍆', '🥔', '🥕', '🌽', '🌶️', '🫑', '🫛', '🥒', '🥬', '🥦', '🧄', '🧅', '🫚', '🫜', '🍄', '🍄‍🟫', '🥜', '🫘', '🌰', '🍞', '🥐', '🥖', '🫓', '🥨', '🥯', '🥞', '🧇', '🧀', '🍖', '🍗', '🥩', '🥓', '🍔', '🍟', '🍕', '🌭', '🥪', '🌮', '🌯', '🫔', '🥙', '🧆', '🥚', '🍳', '🥘', '🍲', '🫕', '🥣', '🥗', '🍿', '🧈', '🧂', '🥫', '🍱', '🍘', '🍙', '🍚', '🍛', '🍜', '🍝', '🍠', '🍢', '🍣', '🍤', '🍥', '🥮', '🍡', '🥟', '🥠', '🥡', '🦀', '🦞', '🦐', '🦑', '🦪', '🍦', '🍧', '🍨', '🍩', '🍪', '🎂', '🍰', '🧁', '🥧', '🍫', '🍬', '🍭', '🍮', '🍯', '🍼', '🥛', '☕', '🫖', '🍵', '🍶', '🍾', '🍷', '🍸', '🍹', '🍺', '🍻', '🥂', '🥃', '🫗', '🥤', '🧋', '🧃', '🧉', '🧊', '🥢', '🍽️', '🍴', '🥄', '🔪', '🫙', '🏺'] }, { label: '🚘', items: ['🌍', '🌎', '🌏', '🌐', '🗺️', '🗾', '🧭', '🏔️', '⛰️', '🌋', '🗻', '🏕️', '🏖️', '🏜️', '🏝️', '🏞️', '🏟️', '🏛️', '🏗️', '🧱', '🪨', '🪵', '🛖', '🏘️', '🏚️', '🏠', '🏡', '🏢', '🏣', '🏤', '🏥', '🏦', '🏨', '🏩', '🏪', '🏫', '🏬', '🏭', '🏯', '🏰', '💒', '🗼', '🗽', '⛪', '🕌', '🛕', '🕍', '⛩️', '🕋', '⛲', '⛺', '🌁', '🌃', '🏙️', '🌄', '🌅', '🌆', '🌇', '🌉', '♨️', '🎠', '🛝', '🎡', '🎢', '💈', '🎪', '🚂', '🚃', '🚄', '🚅', '🚆', '🚇', '🚈', '🚉', '🚊', '🚝', '🚞', '🚋', '🚌', '🚍', '🚎', '🚐', '🚑', '🚒', '🚓', '🚔', '🚕', '🚖', '🚗', '🚘', '🚙', '🛻', '🚚', '🚛', '🚜', '🏎️', '🏍️', '🛵', '🦽', '🦼', '🛺', '🚲', '🛴', '🛹', '🛼', '🚏', '🛣️', '🛤️', '🛢️', '⛽', '🛞', '🚨', '🚥', '🚦', '🛑', '🚧', '⚓', '🛟', '⛵', '🛶', '🚤', '🛳️', '⛴️', '🛥️', '🚢', '✈️', '🛩️', '🛫', '🛬', '🪂', '💺', '🚁', '🚟', '🚠', '🚡', '🛰️', '🚀', '🛸', '🛎️', '🧳', '⌛', '⏳', '⌚', '⏰', '⏱️', '⏲️', '🕰️', '🕛', '🕧', '🕐', '🕜', '🕑', '🕝', '🕒', '🕞', '🕓', '🕟', '🕔', '🕠', '🕕', '🕡', '🕖', '🕢', '🕗', '🕣', '🕘', '🕤', '🕙', '🕥', '🕚', '🕦', '🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘', '🌙', '🌚', '🌛', '🌜', '🌡️', '☀️', '🌝', '🌞', '🪐', '⭐', '🌟', '🌠', '🌌', '☁️', '⛅', '⛈️', '🌤️', '🌥️', '🌦️', '🌧️', '🌨️', '🌩️', '🌪️', '🌫️', '🌬️', '🌀', '🌈', '🌂', '☂️', '☔', '⛱️', '⚡', '❄️', '☃️', '⛄', '☄️', '🔥', '💧', '🌊'] }, { label: '⚽', items: ['🎃', '🎄', '🎆', '🎇', '🧨', '✨', '🎈', '🎉', '🎊', '🎋', '🎍', '🎎', '🎏', '🎐', '🎑', '🧧', '🎀', '🎁', '🎗️', '🎟️', '🎫', '🎖️', '🏆', '🏅', '🥇', '🥈', '🥉', '⚽', '⚾', '🥎', '🏀', '🏐', '🏈', '🏉', '🎾', '🥏', '🎳', '🏏', '🏑', '🏒', '🥍', '🏓', '🏸', '🥊', '🥋', '🥅', '⛳', '⛸️', '🎣', '🤿', '🎽', '🎿', '🛷', '🥌', '🎯', '🪀', '🪁', '🎱', '🔮', '🪄', '🧿', '🪬', '🎮', '🕹️', '🎰', '🎲', '🧩', '🧸', '🪅', '🪩', '🪆', '♠️', '♥️', '♦️', '♣️', '♟️', '🃏', '🀄', '🎴', '🎭', '🖼️', '🎨', '🧵', '🪡', '🧶', '🪢'] }, { label: '💡', items: ['👓', '🕶️', '🥽', '🥼', '🦺', '👔', '👕', '👖', '🧣', '🧤', '🧥', '🧦', '👗', '👘', '🥻', '🩱', '🩲', '🩳', '👙', '👚', '👛', '👜', '👝', '🛍️', '🎒', '🩴', '👞', '👟', '🥾', '🥿', '👠', '👡', '🩰', '👢', '👑', '👒', '🎩', '🎓', '🧢', '🪖', '⛑️', '📿', '💄', '🪭', '💍', '💎', '🔇', '🔈', '🔉', '🔊', '📢', '📣', '📯', '🔔', '🔕', '🎼', '🎵', '🎶', '🎙️', '🎚️', '🎛️', '🎤', '🎧', '📻', '🎷', '🪗', '🎸', '🎹', '🎺', '🎻', '🪕', '🪉', '🥁', '🪘', '🪇', '🪈', '📱', '📲', '☎️', '📞', '📟', '📠', '🔋', '🪫', '🔌', '💻', '🖥️', '🖨️', '⌨️', '🖱️', '🖲️', '💽', '💾', '💿', '📀', '🧮', '🎥', '🎞️', '📽️', '🎬', '📺', '📷', '📸', '📹', '📼', '🔍', '🔎', '🕯️', '💡', '🔦', '🏮', '🪔', '📔', '📕', '📖', '📗', '📘', '📙', '📚', '📓', '📒', '📃', '📜', '📄', '📰', '🗞️', '📑', '🔖', '🏷️', '💰', '🪙', '💴', '💵', '💶', '💷', '💸', '💳', '🧾', '💹', '✉️', '📧', '📨', '📩', '📤', '📥', '📦', '📫', '📪', '📬', '📭', '📮', '🗳️', '✏️', '✒️', '🖋️', '🖊️', '🖌️', '🖍️', '📝', '💼', '📁', '📂', '🗂️', '📅', '📆', '🗒️', '🗓️', '📇', '📈', '📉', '📊', '📋', '📌', '📍', '📎', '🖇️', '📏', '📐', '✂️', '🗃️', '🗄️', '🗑️', '🔒', '🔓', '🔏', '🔐', '🔑', '🗝️', '🔨', '🪓', '⛏️', '⚒️', '🛠️', '🗡️', '⚔️', '🔫', '🪃', '🏹', '🛡️', '🪚', '🔧', '🪛', '🔩', '⚙️', '🗜️', '⚖️', '🦯', '🔗', '⛓️', '⛓️‍💥', '🪝', '🧰', '🧲', '🪜', '⚗️', '🧪', '🧫', '🧬', '🔬', '🔭', '📡', '💉', '🩸', '💊', '🩹', '🩼', '🩺', '🩻', '🚪', '🛗', '🪞', '🪟', '🛏️', '🛋️', '🪑', '🚽', '🪠', '🚿', '🛁', '🪤', '🪒', '🧴', '🧷', '🧹', '🪏', '🧺', '🧻', '🪣', '🧼', '🫧', '🫟', '🪥', '🪮', '🧽', '🧯', '🛒', '🚬', '⚰️', '🪦', '⚱️', '🗿', '🪧', '🪪'] }, { label: '🔣', items: ['🏧', '🚮', '🚰', '♿', '🚹', '🚺', '🚻', '🚼', '🚾', '🛂', '🛃', '🛄', '🛅', '⚠️', '🚸', '⛔', '🚫', '🚳', '🚭', '🚯', '🚱', '🚷', '📵', '🔞', '☢️', '☣️', '⬆️', '↗️', '➡️', '↘️', '⬇️', '↙️', '⬅️', '↖️', '↕️', '↔️', '↩️', '↪️', '⤴️', '⤵️', '🔃', '🔄', '🔙', '🔚', '🔛', '🔜', '🔝', '🛐', '⚛️', '🕉️', '✡️', '☸️', '☯️', '✝️', '☦️', '☪️', '☮️', '🕎', '🪯', '🔯', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓', '⛎', '🔀', '🔁', '🔂', '▶️', '⏩', '⏭️', '⏯️', '◀️', '⏪', '⏮️', '🔼', '⏫', '🔽', '⏬', '⏸️', '⏹️', '⏺️', '⏏️', '🎦', '🔅', '🔆', '📶', '📳', '📴', '🛜', '🫆', '♀️', '♂️', '⚧️', '✖️', '➕', '➖', '➗', '🟰', '♾️', '‼️', '⁉️', '❓', '❔', '❕', '❗', '〰️', '💱', '💲', '⚕️', '♻️', '⚜️', '🔱', '📛', '🔰', '⭕', '✅', '☑️', '✔️', '❌', '❎', '➰', '➿', '〽️', '✳️', '✴️', '❇️', '©️', '®️', '™️', '#️⃣', '*️⃣', '0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟', '🔠', '🔡', '🔢', '🔣', '🔤', '🅰️', '🆎', '🅱️', '🆑', '🆒', '🆓', 'ℹ️', '🆔', 'Ⓜ️', '🆕', '🆖', '🅾️', '🆗', '🅿️', '🆘', '🆙', '🆚', '🈁', '🈂️', '🈷️', '🈶', '🈯', '🉐', '🈹', '🈚', '🈲', '🉑', '🈸', '🈴', '🈳', '㊗️', '㊙️', '🈺', '🈵', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '🟤', '⚫', '⚪', '🟥', '🟧', '🟨', '🟩', '🟦', '🟪', '🟫', '⬛', '⬜', '◼️', '◻️', '◾', '◽', '▪️', '▫️', '🔶', '🔷', '🔸', '🔹', '🔺', '🔻', '💠', '🔘', '🔳', '🔲'] }, { label: '🏁', items: ['🏁', '🚩', '🎌', '🏴', '🏳️', '🏳️‍🌈', '🏳️‍⚧️', '🏴‍☠️', '🇦🇨', '🇦🇩', '🇦🇪', '🇦🇫', '🇦🇬', '🇦🇮', '🇦🇱', '🇦🇲', '🇦🇴', '🇦🇶', '🇦🇷', '🇦🇸', '🇦🇹', '🇦🇺', '🇦🇼', '🇦🇽', '🇦🇿', '🇧🇦', '🇧🇧', '🇧🇩', '🇧🇪', '🇧🇫', '🇧🇬', '🇧🇭', '🇧🇮', '🇧🇯', '🇧🇱', '🇧🇲', '🇧🇳', '🇧🇴', '🇧🇶', '🇧🇷', '🇧🇸', '🇧🇹', '🇧🇻', '🇧🇼', '🇧🇾', '🇧🇿', '🇨🇦', '🇨🇨', '🇨🇩', '🇨🇫', '🇨🇬', '🇨🇭', '🇨🇮', '🇨🇰', '🇨🇱', '🇨🇲', '🇨🇳', '🇨🇴', '🇨🇵', '🇨🇶', '🇨🇷', '🇨🇺', '🇨🇻', '🇨🇼', '🇨🇽', '🇨🇾', '🇨🇿', '🇩🇪', '🇩🇬', '🇩🇯', '🇩🇰', '🇩🇲', '🇩🇴', '🇩🇿', '🇪🇦', '🇪🇨', '🇪🇪', '🇪🇬', '🇪🇭', '🇪🇷', '🇪🇸', '🇪🇹', '🇪🇺', '🇫🇮', '🇫🇯', '🇫🇰', '🇫🇲', '🇫🇴', '🇫🇷', '🇬🇦', '🇬🇧', '🇬🇩', '🇬🇪', '🇬🇫', '🇬🇬', '🇬🇭', '🇬🇮', '🇬🇱', '🇬🇲', '🇬🇳', '🇬🇵', '🇬🇶', '🇬🇷', '🇬🇸', '🇬🇹', '🇬🇺', '🇬🇼', '🇬🇾', '🇭🇰', '🇭🇲', '🇭🇳', '🇭🇷', '🇭🇹', '🇭🇺', '🇮🇨', '🇮🇩', '🇮🇪', '🇮🇱', '🇮🇲', '🇮🇳', '🇮🇴', '🇮🇶', '🇮🇷', '🇮🇸', '🇮🇹', '🇯🇪', '🇯🇲', '🇯🇴', '🇯🇵', '🇰🇪', '🇰🇬', '🇰🇭', '🇰🇮', '🇰🇲', '🇰🇳', '🇰🇵', '🇰🇷', '🇰🇼', '🇰🇾', '🇰🇿', '🇱🇦', '🇱🇧', '🇱🇨', '🇱🇮', '🇱🇰', '🇱🇷', '🇱🇸', '🇱🇹', '🇱🇺', '🇱🇻', '🇱🇾', '🇲🇦', '🇲🇨', '🇲🇩', '🇲🇪', '🇲🇫', '🇲🇬', '🇲🇭', '🇲🇰', '🇲🇱', '🇲🇲', '🇲🇳', '🇲🇴', '🇲🇵', '🇲🇶', '🇲🇷', '🇲🇸', '🇲🇹', '🇲🇺', '🇲🇻', '🇲🇼', '🇲🇽', '🇲🇾', '🇲🇿', '🇳🇦', '🇳🇨', '🇳🇪', '🇳🇫', '🇳🇬', '🇳🇮', '🇳🇱', '🇳🇴', '🇳🇵', '🇳🇷', '🇳🇺', '🇳🇿', '🇴🇲', '🇵🇦', '🇵🇪', '🇵🇫', '🇵🇬', '🇵🇭', '🇵🇰', '🇵🇱', '🇵🇲', '🇵🇳', '🇵🇷', '🇵🇸', '🇵🇹', '🇵🇼', '🇵🇾', '🇶🇦', '🇷🇪', '🇷🇴', '🇷🇸', '🇷🇺', '🇷🇼', '🇸🇦', '🇸🇧', '🇸🇨', '🇸🇩', '🇸🇪', '🇸🇬', '🇸🇭', '🇸🇮', '🇸🇯', '🇸🇰', '🇸🇱', '🇸🇲', '🇸🇳', '🇸🇴', '🇸🇷', '🇸🇸', '🇸🇹', '🇸🇻', '🇸🇽', '🇸🇾', '🇸🇿', '🇹🇦', '🇹🇨', '🇹🇩', '🇹🇫', '🇹🇬', '🇹🇭', '🇹🇯', '🇹🇰', '🇹🇱', '🇹🇲', '🇹🇳', '🇹🇴', '🇹🇷', '🇹🇹', '🇹🇻', '🇹🇼', '🇹🇿', '🇺🇦', '🇺🇬', '🇺🇲', '🇺🇳', '🇺🇸', '🇺🇾', '🇺🇿', '🇻🇦', '🇻🇨', '🇻🇪', '🇻🇬', '🇻🇮', '🇻🇳', '🇻🇺', '🇼🇫', '🇼🇸', '🇽🇰', '🇾🇪', '🇾🇹', '🇿🇦', '🇿🇲', '🇿🇼', '🏴󠁧󠁢󠁥󠁮󠁧󠁿', '🏴󠁧󠁢󠁳󠁣󠁴󠁿', '🏴󠁧󠁢󠁷󠁬󠁳󠁿'] }]
++
++export const emoticonCategories: PickerCategory[] = [{ label: '(^_^)', items: [':D', ':)', ';)', ':-)', '^_^', '(^^)', '(^^♪', 'ʕ•ٹ•ʔ', '(^o^)', '(^^)/', '(^^)v', '(^_^)', '(・∀・)', '(^_-)', '(≧▽≦)', '(^。^)', '(^・^)', '(^ム^)', '(•ө•)♡', '(ㆁωㆁ*)', '(^_^)v', '(*^^*)', '(*´∀｀)', '( ´∀｀)', '(≧∇≦)b', '(*^^)v', '(^o^)v', '(^_^)/', '(^o^)／', '(*ﾟ∀ﾟ)', '(^o^)丿', '(^O^)v', '(^_^.)', '（ ・∀・）', '(๑´ڡ`๑)', '•̀.̫•́✧', '(´ڡ`ლ)', '(･ิω･ิ)', '(*´ڡ`●)', '❤(ӦｖӦ｡)', '(●´ϖ`●)', '＼(^o^)／', '(*´ω｀*)', '(*^_^*)', '(^o^)丿', '(^_-)-☆', '(*^。^*)', '(^。^)ノ', '(ﾉ´∀｀*)', '•̀ω•́ʔ✧', '( ･ิϖ･ิ)', '(♡ε♡ )۶', '(　･ิω･ิ)', '( ･ิω･ิ)', '(￣ー￣)ﾆﾔﾘ', '(^^)/~~~', '(๑´3｀๑)۶', '(@^^)/~~~', '(^.^)/~~~', '(๑•̀ㅁ•́๑)✧', '(๑•̀ㅂ•́)و✧', '(>ω<)', '(*˘︶˘*).｡.:*♡', '(｡>﹏<｡)', '(*>_<*)ﾉ', '(｡>﹏<｡)ﾉﾞ✧*。'] }, { label: '(-_-;)', items: ['^^;', '^_^;', '(^^ゞ', '(・・;', '(;_;', '(・・;)', '(*_*;', '(ーー;)', '(^o^;', '(゜o゜;', '(・。・;', '(^.^;', '(@@;)', '(¯―¯٥)', '(^_^;)', '(-_-;)', '(\'・ω・\')', '(°ー°〃)', '(ーー゛)', '(~_~;)', '(；´Д｀)', '(^o^;)', '(；・∀・)', '(；´∀｀)', '(-.-;)', '(・_・;)', '(＠_＠;)', '（；^ω^）', '(；一_一)', '(_ _;)', '(^O^;)', '(~O~;)', '(・.・;)', '(=o=;)', '(-_-;)', '(~_~;)', '(-.-;)', '(；一_一)', '(~O~;)', '(=o=;)', '(´∀｀；)', '(´-﹏-`；)', '(ㆀ˘･з･˘)', '(_ _;)m', '(_ _;)m', '( •̀ㅁ•́;)', '(； ･`д･´)'] }, { label: '(*_*)', items: [':-O', ':-|', '(゜゜)', '(@_@)', '(*_*)', '(+_+)', '(・o・)', '(゜o゜)', '(゜-゜)', '(?_?)', '(ﾟДﾟ)', '( ﾟдﾟ)', '＼(◎o◎)／', '(✽ ﾟдﾟ ✽)', '≡≡ﾍ( ´Д`)ﾉ'] }, { label: '(T_T)', items: ['(TT)', '(__)', '(;_;', '(´Д⊂ヽ', '(T_T)', '(;_;)', '(._.)', '(ToT)', '(_ _)', '(/_;)', '(:_;)', '(;O;)', '(TдT)', '(TOT)', '(;_:)', '|￣|○', '(_ _;)', '(¯―¯٥)', '(__)m', '(｡ŏ﹏ŏ)', '(ヽ´ω`)', '( ；∀；)', '(･ัω･ั)', '(_^_)_', '(._.)_', '(_ _)m', '(*´﹃｀*)', '(´・ω・`)', '(´・ω・｀)', '(´；ω；｀)', '(´д⊂)‥ﾊｩ', '( ･ั﹏･ั)', '(つд⊂)ｴｰﾝ', '(_ _;)m', '( ´Д｀)=3', '(ﾉД`)ｼｸｼｸ', '(๑´0`๑)۶', '(ToT)/~~~', '(;_;)/~~~', '(T_T)/~~~', '(´；ω；｀)ｳｯ…', '｡ﾟ(ﾟ´Д｀ﾟ)ﾟ｡', '(´；ω；｀)ﾌﾞﾜｯ', '(๑´•.̫ • `๑)', '(´ . .̫ . `)', '｡･ﾟ･(ﾉД`)･ﾟ･｡', '｡･ﾟ･(ﾉ∀`)･ﾟ･｡', '(´°̥̥̥̥̥̥̥̥ω°̥̥̥̥̥̥̥̥｀)'] }, { label: '(-_-)', items: [':(', ':|', ':-(', ':-P', '=_=', '(--)', '(｀´）', '(-_-)', '(-.-)', '(=_=)', '(︶^︶)', '→_→', '←_←', '(~o~)', '(~_~)', '(~O~)', '(ー_ー)', '( 一一)', '(・へ・)', '(ーー゛)', '(－－〆)', '(#･∀･)', '(-_-;)', '(~_~;)', '(-.-;)', '(=_=;)', '(~O~;)', '(=o=;)', '(-_-メ)', '(~_~メ)', '(^_^メ)', '(ー_ー;)', '(；一_一)', '((+_+))', '(# ﾟДﾟ)', '( ´Д｀)=3', '(๑`^´๑)۶', '(๑òωó๑)۶'] }, { label: '(･∀･)', items: ['(⌒▽⌒)', '（￣▽￣）', '(=・ω・=)', '(｀・ω・´)', '(〜￣△￣)〜', '(･∀･)', '(°∀°)ﾉ', '(￣3￣)', '╮(￣▽￣)╭', '_(:3」∠)_', '( ´_ゝ｀)', '←_←', '→_→', '(<_<)', '(>_>)', '(;¬_¬)', '("▔□▔)/', '(ﾟДﾟ≡ﾟдﾟ)!?', 'Σ(ﾟдﾟ;)', 'Σ( ￣□￣||)', '(´；ω；`)', '（/TДT)/', '(^・ω・^ )', '(｡･ω･｡)', '(●￣(ｴ)￣●)', 'ε=ε=(ノ≧∇≦)ノ', '(´･_･`)', '(-_-#)', '（￣へ￣）', '(￣ε(#￣) Σ', 'ヽ(`Д´)ﾉ', '（#-_-)┯━┯', '(╯°口°)╯(┴—┴', '←◡←', '( ♥д♥)', 'Σ>―(〃°ω°〃)♡→', '⁄(⁄ ⁄•⁄ω⁄•⁄ ⁄)⁄', '(╬ﾟдﾟ)▄︻┻┳═一', '･*･:≡(　ε:)', '¯\\_(ツ)_/¯'] }]
 diff --git a/src/googlepinyin.ts b/src/googlepinyin.ts
 new file mode 100644
-index 0000000..09c91fc
+index 0000000..6a19e3d
 --- /dev/null
 +++ b/src/googlepinyin.ts
 @@ -0,0 +1,145 @@
@@ -203,7 +640,7 @@ index 0000000..09c91fc
 +    { keys: [{ type: 'shift', flex: '1.5' }, ...letterRows[2], { type: 'backspace', flex: '1.5' }] },
 +    { keys: [
 +      { type: 'layer', label: '?123', layer: 'number', flex: '1.5' },
-+      { type: 'key', label: ',', key: ',', code: 'Comma', variant: 'alternative' },
++      { type: 'key', label: ',', key: ',', code: 'Comma', variant: 'alternative', subLabel: { topRight: '☺' }, commaMenu: true },
 +      { type: 'globe' },
 +      { type: 'space', flex: '4' },
 +      { type: 'key', label: '.', key: '.', code: 'Period', variant: 'alternative', longPress: longPress('.') },
@@ -276,19 +713,22 @@ index 8a28451..6b8b188 100644
        container.setAttribute(DATA_KEY, dataKey)
        break
 diff --git a/src/keyboard.ts b/src/keyboard.ts
-index 9cbf8f1..aaca0e6 100644
+index 9cbf8f1..f2c6dd0 100644
 --- a/src/keyboard.ts
 +++ b/src/keyboard.ts
-@@ -1,4 +1,4 @@
+@@ -1,20 +1,56 @@
 -import type { SystemEvent } from './api'
 +import type { KeyboardConfig, SystemEvent } from './api'
  import type { BUILTIN_LAYOUT, Layout } from './layout'
  import presetCss from 'bundle-text:./preset.css'
  import qwerty from '../fcitx5-keyboard-layouts/layout/qwerty.json'
-@@ -6,15 +6,44 @@ import { renderCandidateBar, setCandidateActions, setCandidates, setPreedit } fr
+ import { renderCandidateBar, setCandidateActions, setCandidates, setPreedit } from './candidates'
++import { renderClipboard, setClipboard } from './clipboard'
  import { hideContextMenu, renderContextmenu } from './contextmenu'
- import { removeCandidatesFromStack, setDisplayMode } from './display'
+-import { removeCandidatesFromStack, setDisplayMode } from './display'
++import { getDisplayMode, removeCandidatesFromStack, setDisplayMode } from './display'
  import { deselect, renderEditor, select } from './editor'
++import { renderEmojiPicker } from './emoji'
 +import { googlePinyinLayout } from './googlepinyin'
  import { renderPopover } from './popover'
  import { renderReturnBar } from './return'
@@ -312,6 +752,11 @@ index 9cbf8f1..aaca0e6 100644
 +  '.fcitx-keyboard-status-area-container',
 +  '.fcitx-keyboard-side-button-container',
 +  '.fcitx-keyboard-contextmenu-item',
++  '.fcitx-keyboard-emoji-item',
++  '.fcitx-keyboard-emoji-tab',
++  '.fcitx-keyboard-emoji-button',
++  '.fcitx-keyboard-clipboard-entry',
++  '.fcitx-keyboard-clipboard-button',
 +].join(',')
 +
 +let config_: KeyboardConfig = { theme: 'system', keyBorder: false }
@@ -333,7 +778,28 @@ index 9cbf8f1..aaca0e6 100644
  
  export function setLayout(id: string, layout: Layout) {
    setLayout_(layout)
-@@ -72,6 +101,12 @@ export function setLayout(id: string, layout: Layout) {
+@@ -47,6 +83,12 @@ export function setLayout(id: string, layout: Layout) {
+   const symbol = renderSymbolSelector()
+   symbol.classList.add('fcitx-keyboard-frame')
+ 
++  const emojiPicker = renderEmojiPicker()
++  emojiPicker.classList.add('fcitx-keyboard-frame')
++
++  const clipboard = renderClipboard()
++  clipboard.classList.add('fcitx-keyboard-frame')
++
+   const contextmenu = renderContextmenu()
+   hide(contextmenu)
+ 
+@@ -66,12 +108,20 @@ export function setLayout(id: string, layout: Layout) {
+     editor,
+     statusArea,
+     symbol,
++    emojiPicker,
++    clipboard,
+     contextmenu,
+     popover,
+     invisible,
    ]) {
      container.appendChild(element)
    }
@@ -346,7 +812,7 @@ index 9cbf8f1..aaca0e6 100644
    if (isAndroidOrIOS) {
      // Disable iOS Safari select text.
      // Ideally Android doesn't need this, but default behavior of touchstart will cause input blur.
-@@ -84,6 +119,7 @@ export function setLayout(id: string, layout: Layout) {
+@@ -84,6 +134,7 @@ export function setLayout(id: string, layout: Layout) {
    const app = document.getElementById(id)!
    app.innerHTML = ''
    app.appendChild(container)
@@ -354,7 +820,18 @@ index 9cbf8f1..aaca0e6 100644
    setDisplayMode('initial')
    if (isFirefox) {
      // Firefox is buggy if render synchronously.
-@@ -127,6 +163,10 @@ export function onMessage(message: string) {
+@@ -108,6 +159,10 @@ export function onMessage(message: string) {
+       break
+     case 'HIDE':
+       setLayer('default', false)
++      // Back to the keys from panels, which also hides the clipboard's paste button.
++      if (!['initial', 'candidates'].includes(getDisplayMode())) {
++        setDisplayMode('initial')
++      }
+     // fall through
+     case 'CLEAR':
+       hideContextMenu()
+@@ -127,6 +182,13 @@ export function onMessage(message: string) {
        break
      case 'INPUT_METHODS':
        setInputMethods(event.data.inputMethods, event.data.currentInputMethod)
@@ -362,14 +839,17 @@ index 9cbf8f1..aaca0e6 100644
 +      break
 +    case 'CONFIG':
 +      setConfig(event.data)
++      break
++    case 'CLIPBOARD':
++      setClipboard(event.data)
        break
      case 'SELECT':
        return select()
 diff --git a/src/layout.d.ts b/src/layout.d.ts
-index baaf3dd..f50871a 100644
+index baaf3dd..a980648 100644
 --- a/src/layout.d.ts
 +++ b/src/layout.d.ts
-@@ -25,7 +25,10 @@ export interface NormalKey {
+@@ -25,7 +25,12 @@ export interface NormalKey {
      topRight: string
    }
    swipeUp?: Swipe
@@ -377,10 +857,12 @@ index baaf3dd..f50871a 100644
    longPress?: LongPress
 +  // Function key look for punctuation such as comma and period.
 +  variant?: 'alternative'
++  // Long press shows emoji, quick phrase and unicode, like fcitx5-android's comma key.
++  commaMenu?: boolean
  }
  
  export interface ShiftKey {
-@@ -46,6 +49,14 @@ export interface EnterKey {
+@@ -46,6 +51,14 @@ export interface EnterKey {
  
  export interface SymbolKey {
    type: 'symbol'
@@ -395,7 +877,7 @@ index baaf3dd..f50871a 100644
  }
  
  export interface GlobeKey {
-@@ -60,7 +71,8 @@ export type Key = {
+@@ -60,7 +73,8 @@ export type Key = {
    | ShiftKey
    | SpaceKey
    | GlobeKey
@@ -405,7 +887,7 @@ index baaf3dd..f50871a 100644
      type: 'placeholder'
    })
  
-@@ -77,7 +89,7 @@ export interface Layout {
+@@ -77,7 +91,7 @@ export interface Layout {
    layers: Layer[]
  }
  
@@ -415,7 +897,7 @@ index baaf3dd..f50871a 100644
  export interface Context {
    layer: string
 diff --git a/src/preset.css b/src/preset.css
-index 28b57c8..89a6325 100644
+index 28b57c8..5e9b191 100644
 --- a/src/preset.css
 +++ b/src/preset.css
 @@ -1,17 +1,88 @@
@@ -697,16 +1179,16 @@ index 28b57c8..89a6325 100644
 +  box-shadow: none;
 +  inset: 0;
 +  border-radius: 0;
-+}
-+
-+.fcitx-keyboard-borderless .fcitx-keyboard-key.fcitx-keyboard-space {
-+  inset: max(0px, min(16px, calc((100cqh - 26px) / 2))) 10px;
-+  border-radius: 3px;
-+  background-color: var(--fcitx-space-bar);
  }
  
 -.fcitx-keyboard-pressed .fcitx-keyboard-key:is(.fcitx-keyboard-shift, .fcitx-keyboard-backspace, .fcitx-keyboard-enter, .fcitx-keyboard-symbol) {
 -  background-color: white;
++.fcitx-keyboard-borderless .fcitx-keyboard-key.fcitx-keyboard-space {
++  inset: max(0px, min(16px, calc((100cqh - 26px) / 2))) 10px;
++  border-radius: 3px;
++  background-color: var(--fcitx-space-bar);
++}
++
 +.fcitx-keyboard-borderless .fcitx-keyboard-key.fcitx-keyboard-enter {
 +  width: min(35px, 100cqh, 100cqw);
 +  height: min(35px, 100cqh, 100cqw);
@@ -899,6 +1381,167 @@ index 28b57c8..89a6325 100644
  }
  
  .fcitx-keyboard-candidate-bar .fcitx-keyboard-toolbar-button svg {
+@@ -442,3 +600,160 @@
+ .fcitx-keyboard-expanded .fcitx-keyboard-candidate-bar .fcitx-keyboard-toolbar-button svg {
+   transform: rotate(90deg);
+ }
++
++/* Emoji and emoticon picker, like fcitx5-android's PickerWindow. */
++.fcitx-keyboard-emoji-picker {
++  display: flex;
++  flex-direction: column;
++  container-type: size;
++}
++
++.fcitx-keyboard-emoji-grid {
++  flex: 1;
++  display: grid;
++  grid-template-columns: repeat(8, 1fr);
++  grid-auto-rows: 20cqh;
++  overflow: hidden auto;
++  scrollbar-width: none;
++}
++
++.fcitx-keyboard-emoji-grid.fcitx-keyboard-emoticon-grid {
++  grid-template-columns: repeat(3, 1fr);
++}
++
++.fcitx-keyboard-emoji-item {
++  display: flex;
++  justify-content: center;
++  align-items: center;
++  font-size: 26px;
++  white-space: nowrap;
++  overflow: hidden;
++}
++
++.fcitx-keyboard-emoticon-grid .fcitx-keyboard-emoji-item {
++  font-size: 16px;
++}
++
++.fcitx-keyboard-emoji-item:active {
++  background-color: var(--fcitx-key-press);
++}
++
++.fcitx-keyboard-emoji-bottom {
++  display: flex;
++  height: 20cqh;
++  border-top: 1px solid var(--fcitx-divider);
++  background-color: var(--fcitx-alt-key-background);
++}
++
++.fcitx-keyboard-emoji-tabs {
++  flex: 1;
++  display: flex;
++  overflow: auto hidden;
++  scrollbar-width: none;
++}
++
++.fcitx-keyboard-emoji-tab {
++  flex: 0 0 auto;
++  min-width: 44px;
++  padding: 0 6px;
++  display: flex;
++  justify-content: center;
++  align-items: center;
++  font-size: 18px;
++  white-space: nowrap;
++  color: var(--fcitx-alt-key-text);
++}
++
++.fcitx-keyboard-emoji-tab.fcitx-keyboard-pressed {
++  background-color: var(--fcitx-background);
++  border-bottom: 2px solid var(--fcitx-accent-key-background);
++}
++
++.fcitx-keyboard-emoji-button {
++  flex: 0 0 auto;
++  min-width: 52px;
++  display: flex;
++  justify-content: center;
++  align-items: center;
++  font-size: 15px;
++  font-weight: bold;
++  color: var(--fcitx-alt-key-text);
++}
++
++.fcitx-keyboard-emoji-button:active {
++  background-color: var(--fcitx-key-press);
++}
++
++/* Clipboard history, like fcitx5-android's clipboard window. */
++.fcitx-keyboard-clipboard {
++  display: flex;
++  flex-direction: column;
++}
++
++.fcitx-keyboard-clipboard-header {
++  display: flex;
++  height: 40px;
++  align-items: center;
++  border-bottom: 1px solid var(--fcitx-divider);
++}
++
++.fcitx-keyboard-clipboard-paste-slot {
++  flex: 1;
++}
++
++.fcitx-keyboard-clipboard-button {
++  padding: 0 14px;
++  height: 100%;
++  display: flex;
++  align-items: center;
++  font-size: 15px;
++  color: var(--fcitx-alt-key-text);
++}
++
++.fcitx-keyboard-clipboard-button:active {
++  background-color: var(--fcitx-key-press);
++}
++
++.fcitx-keyboard-clipboard-list {
++  flex: 1;
++  display: grid;
++  grid-template-columns: repeat(2, 1fr);
++  grid-auto-rows: min-content;
++  gap: 6px;
++  padding: 6px;
++  overflow: hidden auto;
++  scrollbar-width: none;
++}
++
++.fcitx-keyboard-clipboard-entry {
++  padding: 8px 10px;
++  border-radius: var(--fcitx-key-radius);
++  background-color: var(--fcitx-key-background);
++  box-shadow: 0 1px var(--fcitx-key-shadow);
++  font-size: 14px;
++  color: var(--fcitx-key-text);
++}
++
++.fcitx-keyboard-clipboard-entry:active {
++  background-image: linear-gradient(var(--fcitx-key-press), var(--fcitx-key-press));
++}
++
++.fcitx-keyboard-clipboard-pinned {
++  border-left: 3px solid var(--fcitx-accent-key-background);
++}
++
++.fcitx-keyboard-clipboard-text {
++  display: -webkit-box;
++  -webkit-line-clamp: 4;
++  -webkit-box-orient: vertical;
++  overflow: hidden;
++  word-break: break-all;
++  white-space: pre-wrap;
++}
++
++.fcitx-keyboard-clipboard-empty {
++  grid-column: 1 / -1;
++  padding: 16px;
++  font-size: 14px;
++  color: var(--fcitx-alt-key-text);
++}
 diff --git a/src/symbol.ts b/src/symbol.ts
 index 7797c26..013b72f 100644
 --- a/src/symbol.ts
@@ -1068,10 +1711,18 @@ index 7797c26..013b72f 100644
    return symbolSelector
  }
 diff --git a/src/toolbar.ts b/src/toolbar.ts
-index 4b77d0f..40471fb 100644
+index 4b77d0f..9dbe02e 100644
 --- a/src/toolbar.ts
 +++ b/src/toolbar.ts
-@@ -10,6 +10,8 @@ import { redo, sendEvent, undo } from './ux'
+@@ -3,13 +3,15 @@ import Clipboard from 'bundle-text:../svg/clipboard.svg'
+ import CursorMove from 'bundle-text:../svg/cursor-move.svg'
+ import Ellipsis from 'bundle-text:../svg/ellipsis.svg'
+ import Undo from 'bundle-text:../svg/undo.svg'
+-import { setDisplayMode } from './display'
++import { getDisplayMode, setDisplayMode } from './display'
+ import { disable, div, enable, handleClick, press, release, renderToolbarButton, setSvgStyle } from './util'
+ import { redo, sendEvent, undo } from './ux'
+ 
  let isUndoEnabled: boolean = true
  let isRedoEnabled: boolean = true
  let undoButton: HTMLElement | null = null
@@ -1107,7 +1758,15 @@ index 4b77d0f..40471fb 100644
  function renderDisableButton(icon: string, enabled: () => boolean) {
    const button = div('fcitx-keyboard-toolbar-button')
    button.innerHTML = icon
-@@ -57,7 +79,7 @@ export function renderToolbar() {
+@@ -49,6 +71,7 @@ export function renderToolbar() {
+   handleClick(editButton, () => setDisplayMode('edit'))
+ 
+   const clipboardButton = renderToolbarButton(Clipboard)
++  handleClick(clipboardButton, () => setDisplayMode(getDisplayMode() === 'clipboard' ? 'initial' : 'clipboard'))
+ 
+   const statusAreaButton = renderToolbarButton(Ellipsis)
+   handleClick(statusAreaButton, () => setDisplayMode('statusArea'))
+@@ -57,7 +80,7 @@ export function renderToolbar() {
    handleClick(collapseButton, () => sendEvent({ type: 'COLLAPSE' }))
    setSvgStyle(collapseButton, { transform: 'rotate(270deg)' })
  
@@ -1116,8 +1775,21 @@ index 4b77d0f..40471fb 100644
      toolbar.appendChild(button)
    }
    return toolbar
+diff --git a/src/util.ts b/src/util.ts
+index 363a40c..d05cd19 100644
+--- a/src/util.ts
++++ b/src/util.ts
+@@ -153,3 +153,8 @@ export function enableScroll(element: HTMLElement) {
+     y = touch.clientY
+   })
+ }
++
++// Chinese label when the system language is Chinese.
++export function tr(en: string, zh: string) {
++  return navigator.language.startsWith('zh') ? zh : en
++}
 diff --git a/src/ux.ts b/src/ux.ts
-index 892f0e9..10099b1 100644
+index 892f0e9..c44449c 100644
 --- a/src/ux.ts
 +++ b/src/ux.ts
 @@ -12,7 +12,7 @@ import { renderRow } from './key'
@@ -1129,13 +1801,14 @@ index 892f0e9..10099b1 100644
  
  let layout_: Layout
  let currentLayer = 'default'
-@@ -28,10 +28,13 @@ const touches: { [key: string]: {
+@@ -28,10 +28,14 @@ const touches: { [key: string]: {
    touch: Touch
    state: TouchState
    timer: number | null
 +  // Backspace held down, like fcitx5-android's repeat behavior.
 +  repeat: number | null
    longPress?: LongPress
++  commaMenu?: boolean
    index: number
    type: Key['type'] | undefined
    swipeUp?: Swipe
@@ -1143,7 +1816,7 @@ index 892f0e9..10099b1 100644
    startX: number
    startY: number
    lastX: number
-@@ -41,6 +44,7 @@ const slideStep = 10
+@@ -41,6 +45,7 @@ const slideStep = 10
  
  const DOUBLE_TAP_INTERVAL = 300 // Same with f5a.
  export const LONG_PRESS_THRESHOLD = 300
@@ -1151,7 +1824,7 @@ index 892f0e9..10099b1 100644
  export const DRAG_THRESHOLD = 10 // radius^2
  const SWIPE_THRESHOLD = 10
  
-@@ -60,6 +64,21 @@ function cancelLongPress(touchId: number) {
+@@ -60,6 +65,21 @@ function cancelLongPress(touchId: number) {
    }
  }
  
@@ -1173,7 +1846,7 @@ index 892f0e9..10099b1 100644
  export function setLayout(layout: Layout) {
    layout_ = layout
  }
-@@ -74,6 +93,11 @@ export function sendEvent(event: VirtualKeyboardEvent) {
+@@ -74,6 +94,11 @@ export function sendEvent(event: VirtualKeyboardEvent) {
    client_.sendEvent(event)
  }
  
@@ -1185,7 +1858,7 @@ index 892f0e9..10099b1 100644
  export function undo() {
    sendEvent({ type: 'UNDO' })
  }
-@@ -155,6 +179,9 @@ function touchDown(touch: Touch) {
+@@ -155,6 +180,9 @@ function touchDown(touch: Touch) {
      case 'globe':
        sendEvent({ type: 'GLOBE' })
        break
@@ -1195,7 +1868,7 @@ index 892f0e9..10099b1 100644
    }
  }
  
-@@ -187,6 +214,7 @@ function interrupt(touchId: number) {
+@@ -187,6 +215,7 @@ function interrupt(touchId: number) {
        case 'DOWN':
          break
        default:
@@ -1203,7 +1876,7 @@ index 892f0e9..10099b1 100644
          touches[id].state = 'INTERRUPTED'
          hidePopover()
      }
-@@ -194,10 +222,13 @@ function interrupt(touchId: number) {
+@@ -194,10 +223,13 @@ function interrupt(touchId: number) {
  }
  
  function getSwipe(touch: Touch) {
@@ -1218,7 +1891,7 @@ index 892f0e9..10099b1 100644
    return undefined
  }
  
-@@ -250,18 +281,21 @@ function swipeRelease(touch: Touch) {
+@@ -250,18 +282,31 @@ function swipeRelease(touch: Touch) {
    }
  }
  
@@ -1227,9 +1900,19 @@ index 892f0e9..10099b1 100644
    touches[touchId].timer = null
    touches[touchId].state = 'PRESSING'
 -  if (touches[touchId].type === 'globe') {
-+  const { touch, longPress, type } = touches[touchId]
++  const { touch, longPress, type, commaMenu } = touches[touchId]
 +  const container = getContainer(touch)!
-+  if (type === 'space') {
++  if (commaMenu) {
++    // fcitx5-android's comma key menu.
++    hidePopover()
++    const zh = navigator.language.startsWith('zh')
++    showContextmenu(container, [
++      { text: zh ? '表情' : 'Emoji', callback() { setDisplayMode('emoji') } },
++      { text: zh ? '快速输入' : 'Quick Phrase', callback() { sendEvent({ type: 'QUICKPHRASE' }) } },
++      { text: 'Unicode', callback() { sendEvent({ type: 'UNICODE' }) } },
++    ])
++  }
++  else if (type === 'space') {
 +    // Long press space picks an input method, like fcitx5-android.
 +    hidePopover()
      showContextmenu(container, inputMethods_.map(inputMethod => ({
@@ -1245,7 +1928,7 @@ index 892f0e9..10099b1 100644
    }
  }
  
-@@ -288,24 +322,32 @@ export function onTouchStart(event: TouchEvent) {
+@@ -288,24 +333,32 @@ export function onTouchStart(event: TouchEvent) {
    let container = getContainer(touch)
    const key = getKey(container)
    let swipeUp: Swipe | undefined
@@ -1265,9 +1948,10 @@ index 892f0e9..10099b1 100644
 -        break
        case 'key':
          swipeUp = key.swipeUp
-+        swipeDown = key.swipeDown
-         if (key.longPress) {
+-        if (key.longPress) {
 -          timer = window.setTimeout(longPressHandler, LONG_PRESS_THRESHOLD, touch.identifier, container)
++        swipeDown = key.swipeDown
++        if (key.longPress || key.commaMenu) {
 +          timer = window.setTimeout(longPressHandler, LONG_PRESS_THRESHOLD, touch.identifier)
            longPress = key.longPress
          }
@@ -1282,29 +1966,30 @@ index 892f0e9..10099b1 100644
          break
      }
    }
-@@ -316,8 +358,10 @@ export function onTouchStart(event: TouchEvent) {
+@@ -316,8 +369,11 @@ export function onTouchStart(event: TouchEvent) {
      touch,
      state,
      timer,
 +    repeat: null,
++    commaMenu: key?.type === 'key' ? key.commaMenu : undefined,
      type: key?.type,
      swipeUp,
 +    swipeDown,
      longPress,
      index: longPress?.index ?? 0,
      startX: touch.clientX,
-@@ -343,7 +387,9 @@ export function onTouchMove(event: TouchEvent) {
+@@ -343,7 +399,9 @@ export function onTouchMove(event: TouchEvent) {
        doSwipe(touch)
        break
      case 'PRESSING':
 -      moveHighlight(touch)
-+      if (touches[touch.identifier].longPress) {
++      if (touches[touch.identifier].longPress && !touches[touch.identifier].commaMenu) {
 +        moveHighlight(touch)
 +      }
        break
    }
  }
-@@ -352,12 +398,14 @@ export function onTouchEnd(event: TouchEvent) {
+@@ -352,12 +410,14 @@ export function onTouchEnd(event: TouchEvent) {
    const touchId = event.changedTouches[0].identifier
    interrupt(touchId)
    cancelLongPress(touchId)
@@ -1319,14 +2004,14 @@ index 892f0e9..10099b1 100644
        touchDown(touch)
        // fall through
      case 'DOWN':
-@@ -375,11 +423,18 @@ export function onTouchEnd(event: TouchEvent) {
+@@ -375,11 +435,18 @@ export function onTouchEnd(event: TouchEvent) {
        }
        break
      case 'PRESSING':
 -      hidePopover()
 -      longPressRelease(touchId)
-+      // The input method menu stays open for a tap.
-+      if (type !== 'space') {
++      // The input method and comma menus stay open for a tap.
++      if (type !== 'space' && !touches[touchId].commaMenu) {
 +        hidePopover()
 +        longPressRelease(touchId)
 +      }
@@ -1340,7 +2025,7 @@ index 892f0e9..10099b1 100644
  }
  
  export function setLayer(id: string, locked: boolean) {
-@@ -438,11 +493,20 @@ export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
+@@ -438,11 +505,20 @@ export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
    }
  }
  

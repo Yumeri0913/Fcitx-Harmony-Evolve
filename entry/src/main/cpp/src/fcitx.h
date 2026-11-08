@@ -36,6 +36,8 @@ void scroll(int start, int count);
 // Reload config if the settings page changed it. Returns whether it did.
 bool reloadConfigIfChanged(const std::string &shared);
 void save(const std::string &shared);
+void triggerQuickPhrase();
+void triggerUnicode();
 // Google Pinyin user words, UTF-8 lines of "word\tpin'yin\tcount".
 // Merge into the running pinyin engine. Returns "added existing invalid".
 std::string importGooglePinyinWords(const std::string &tsv);

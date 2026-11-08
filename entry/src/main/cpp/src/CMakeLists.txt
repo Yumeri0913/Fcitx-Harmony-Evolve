@@ -7,7 +7,9 @@ add_library(fcitx SHARED
     settings.cpp
     "${GOOGLEPINYIN_DIR}/googlepinyin_userdata.cpp"
 )
-target_include_directories(fcitx PRIVATE "${GOOGLEPINYIN_DIR}")
+target_include_directories(fcitx PRIVATE "${GOOGLEPINYIN_DIR}"
+    "${PROJECT_SOURCE_DIR}/fcitx5/src/modules/quickphrase"
+    "${PROJECT_SOURCE_DIR}/fcitx5/src/modules/unicode")
 target_link_libraries(fcitx Fcitx5::Core LibIME::Pinyin libhilog_ndk.z.so libace_napi.z.so)
 
 fcitx5_import_addons(fcitx

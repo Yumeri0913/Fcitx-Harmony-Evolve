@@ -4,7 +4,10 @@ import { inputMethodEngine } from '@kit.IMEKit';
 import { display } from '@kit.ArkUI';
 import { KeyCode } from '@kit.InputKit';
 import { vibrator } from '@kit.SensorServiceKit';
-import { SystemEvent, VirtualKeyboardEvent } from '../../../fcitx5-keyboard-web/src/api';
+import {
+  ClipboardEntry as WebClipboardEntry, SystemEvent, VirtualKeyboardEvent
+} from '../../../fcitx5-keyboard-web/src/api';
+import { ClipboardEntry, ClipboardStore } from './ClipboardStore';
 import fcitx, { InputContextState } from 'libentry.so';
 import { FcitxEvent } from './FcitxEvent';
 import { convertCode } from './keycode';
@@ -85,6 +88,7 @@ export class KeyboardController {
   private settings: KeyboardSettings | null = null
   private hapticPresetSupported = true
   private lastSnapshotTime = 0
+  private clipboard = new ClipboardStore()
 
   constructor() {
   }
@@ -96,6 +100,7 @@ export class KeyboardController {
     })
     this.ctx = context;
     this.sharedDir = context.distributedFilesDir
+    this.clipboard.load(context.filesDir)
     this.loadSettings()
     this.initWindow();
     this.registerListener();
@@ -375,9 +380,30 @@ export class KeyboardController {
         this.processResult(fcitx.reset())
         return this.insertText(event.data)
       case 'COPY':
+        this.recordSelection()
         return this.textInputClient?.sendExtendAction(inputMethodEngine.ExtendAction.COPY)
       case 'CUT':
+        this.recordSelection()
         return this.textInputClient?.sendExtendAction(inputMethodEngine.ExtendAction.CUT)
+      case 'CLIPBOARD_SHOW':
+        AppStorage.setOrCreate('clipboardPasteVisible', true)
+        return this.sendClipboard()
+      case 'CLIPBOARD_HIDE':
+        AppStorage.setOrCreate('clipboardPasteVisible', false)
+        return
+      case 'CLIPBOARD_PIN':
+        this.clipboard.pin(event.data.id, event.data.pinned)
+        return this.sendClipboard()
+      case 'CLIPBOARD_DELETE':
+        this.clipboard.remove(event.data)
+        return this.sendClipboard()
+      case 'CLIPBOARD_CLEAR':
+        this.clipboard.clear()
+        return this.sendClipboard()
+      case 'QUICKPHRASE':
+        return fcitx.triggerQuickPhrase()
+      case 'UNICODE':
+        return fcitx.triggerUnicode()
       case 'DESELECT':
         this.selecting = false
         this.setCursor(this.textInputClient?.getTextIndexAtCursorSync() ?? 0)
@@ -456,6 +482,39 @@ export class KeyboardController {
       this.panel.resize(width, containerHeight)
       this.panel.setUiContent('InputMethodExtensionAbility/pages/VirtualKeyboard')
     })
+  }
+
+  private sendClipboard() {
+    const entries: WebClipboardEntry[] = this.clipboard.list().map((e: ClipboardEntry): WebClipboardEntry => ({
+      id: e.id,
+      text: e.text,
+      pinned: e.pinned,
+    }))
+    this.sendEvent({ type: 'CLIPBOARD', data: entries })
+  }
+
+  // The selected text, for the clipboard history: HarmonyOS doesn't let the keyboard
+  // read what the app copies.
+  private recordSelection() {
+    if (this.selectionStart === this.selectionEnd) {
+      return
+    }
+    // With a selection, getForward and getBackward return the text around it, not in it,
+    // so take it from the editor text tracked by textChange.
+    const start = Math.min(this.selectionStart, this.selectionEnd)
+    const end = Math.max(this.selectionStart, this.selectionEnd)
+    this.clipboard.add(this.textWithPreedit.substring(start, end))
+  }
+
+  // Text read by the system paste button: paste it and keep it in the history.
+  public pasteFromSystem(text: string) {
+    if (!text) {
+      return
+    }
+    this.clipboard.add(text)
+    this.processResult(fcitx.reset())
+    this.insertText(text)
+    this.sendClipboard()
   }
 
   private loadSettings() {
@@ -550,7 +609,9 @@ export class KeyboardController {
     try {
       const before = this.getTextBefore()
       this.preeditIndex = before.length
-      resetStacks(before + this.getTextAfter())
+      // Kept up to date by textChange, which isn't called on focus.
+      this.textWithPreedit = before + this.getTextAfter()
+      resetStacks(this.textWithPreedit)
       this.initialized = true
     } catch (e) { // getTextIndexAtCursorSync can throw.
       console.error(`${e}`)

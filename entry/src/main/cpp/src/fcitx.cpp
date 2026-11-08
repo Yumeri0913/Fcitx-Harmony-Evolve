@@ -26,6 +26,8 @@
 #include "../webkeyboard/webkeyboard.h"
 #include "inputmethod.h"
 #include "googlepinyin_public.h"
+#include "quickphrase_public.h"
+#include "unicode_public.h"
 #include "googlepinyin_userdata.h"
 
 // Native library directory names in the bundle, as nativeLibraryPath "libs/arm64".
@@ -399,6 +401,27 @@ void save(const std::string &shared) {
     reloadConfigIfChanged(shared);
     with_fcitx([] { instance->save(); });
     configSignature_ = configSignature(shared);
+}
+
+// From the comma key menu, like fcitx5-android.
+void triggerQuickPhrase() {
+    with_fcitx([] {
+        auto *ic = instance->mostRecentInputContext();
+        auto *quickphrase = instance->addonManager().addon("quickphrase", true);
+        if (ic && quickphrase) {
+            quickphrase->call<IQuickPhrase::trigger>(ic, "", "", "", "", Key{FcitxKey_None});
+        }
+    });
+}
+
+void triggerUnicode() {
+    with_fcitx([] {
+        auto *ic = instance->mostRecentInputContext();
+        auto *unicode = instance->addonManager().addon("unicode", true);
+        if (ic && unicode) {
+            unicode->call<IUnicode::trigger>(ic);
+        }
+    });
 }
 
 std::string importGooglePinyinWords(const std::string &tsv) {

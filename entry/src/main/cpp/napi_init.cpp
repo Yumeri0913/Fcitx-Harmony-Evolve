@@ -107,6 +107,16 @@ API(save) {
     return {};
 }
 
+API(triggerQuickPhrase) {
+    fcitx::triggerQuickPhrase();
+    return {};
+}
+
+API(triggerUnicode) {
+    fcitx::triggerUnicode();
+    return {};
+}
+
 API(reloadConfigIfChanged) {
     GET_ARGS(1)
     GET_STRING(shared, 0)
@@ -221,6 +231,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"scroll", nullptr, scroll, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"save", nullptr, save, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reloadConfigIfChanged", nullptr, reloadConfigIfChanged, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"triggerQuickPhrase", nullptr, triggerQuickPhrase, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"triggerUnicode", nullptr, triggerUnicode, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"initSettings", nullptr, initSettings, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getConfig", nullptr, getConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setConfig", nullptr, setConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
