@@ -1,6 +1,7 @@
 // A fcitx config rendered from its description, like fcitx5-android's PreferenceScreenFactory.
 import fcitx from 'libentry.so';
 import { FcitxConfig, OptionDesc, OptionType, RawConfig } from '../../common/FcitxConfig';
+import { TextFilePageParam, textFileParam } from './TextFilePage';
 
 export interface ConfigPageParam {
   uri: string
@@ -13,6 +14,33 @@ const ROW_PADDING: Padding = { left: 16, right: 16, top: 10, bottom: 10 }
 export function configUri(external: string): string | null {
   const prefix = 'fcitx://config/'
   return external.startsWith(prefix) ? external.substring(prefix.length) : null
+}
+
+class ExternalPage {
+  name: string
+  param: TextFilePageParam | null
+
+  constructor(name: string, param: TextFilePageParam | null) {
+    this.name = name
+    this.param = param
+  }
+}
+
+// Pages for External options, like fcitx5-android's ConfigExternal.ETy.
+function externalPage(option: string): ExternalPage | null {
+  switch (option) {
+    case 'DictManager':
+      return new ExternalPage('pinyinDict', null)
+    case 'CustomPhrase':
+      return new ExternalPage('textFile', textFileParam('customPhrase'))
+    case 'Punctuation':
+      return new ExternalPage('textFile', textFileParam('punctuation'))
+    case 'QuickPhrase':
+    case 'Editor':
+      return new ExternalPage('quickPhrase', null)
+    default:
+      return null
+  }
 }
 
 // One list row: an option with the config node holding its value, or a group header.
@@ -231,13 +259,18 @@ export struct ConfigPage {
   externalRow(row: ConfigRow) {
     Row() {
       this.rowLabel(row.option)
-      Text(configUri(row.option.externalUri) ? '›' : '暂不支持')
-        .fontSize(configUri(row.option.externalUri) ? 22 : 14)
+      Text(externalPage(row.option.name) || configUri(row.option.externalUri) ? '›' : '暂不支持')
+        .fontSize(externalPage(row.option.name) || configUri(row.option.externalUri) ? 22 : 14)
         .fontColor($r('sys.color.font_secondary'))
     }
     .width('100%')
     .padding(ROW_PADDING)
     .onClick(() => {
+      const page = externalPage(row.option.name)
+      if (page) {
+        this.stack.pushPathByName(page.name, page.param)
+        return
+      }
       const uri = configUri(row.option.externalUri)
       if (uri) {
         this.stack.pushPathByName('config', { uri: uri, title: row.option.description } as ConfigPageParam)

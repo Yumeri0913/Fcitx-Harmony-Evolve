@@ -14,11 +14,15 @@
     },
     {
       "name": "INTERNET_reason",
-      "value": "Used in Cloud Pinyin."
+      "value": "Cloud pinyin and LAN clipboard sync."
     },
     {
       "name": "VIBRATE_reason",
       "value": "Vibrate on key press."
+    },
+    {
+      "name": "GET_NETWORK_INFO_reason",
+      "value": "Show the address for LAN clipboard sync."
     }
   ]
 }

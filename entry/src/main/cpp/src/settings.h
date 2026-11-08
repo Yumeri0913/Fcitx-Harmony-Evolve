@@ -14,4 +14,6 @@ void setAddonState(const std::string &name, bool enabled);
 std::string availableInputMethods();
 std::string enabledInputMethods();
 void setEnabledInputMethods(const std::string &names);
+// Convert a libime pinyin dictionary between text ("word pin'yin cost" lines) and binary.
+bool convertPinyinDict(const std::string &src, const std::string &dest, bool toBinary);
 } // namespace fcitx

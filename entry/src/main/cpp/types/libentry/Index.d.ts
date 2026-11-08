@@ -26,6 +26,10 @@ export const reloadConfigIfChanged: (shared: string) => void
 // Quick phrase and unicode input, from the comma key menu.
 export const triggerQuickPhrase: () => void
 export const triggerUnicode: () => void
+// Apply data files edited by the settings page in the shared dir.
+export const syncDataIfChanged: (shared: string) => void
+// Pinyin sub config actions, e.g. clearuserdict, clearalldict.
+export const runPinyinAction: (action: string) => void
 // Google Pinyin user words, lines of "word\tpin'yin\tcount".
 // Returns "added existing invalid", or "" when pinyin is unavailable.
 export const importGooglePinyinWords: (tsv: string) => string
@@ -43,3 +47,7 @@ export const setAddonState: (name: string, enabled: boolean) => void
 export const availableInputMethods: () => string
 export const enabledInputMethods: () => string
 export const setEnabledInputMethods: (names: string) => void
+// libime pinyin dictionary text <-> binary.
+export const convertPinyinDict: (src: string, dest: string, toBinary: boolean) => boolean
+// Words of saved pinyin user data files (e.g. from a backup), same format as exportGooglePinyinWords.
+export const readPinyinUserWords: (dictPath: string, historyPath: string) => string

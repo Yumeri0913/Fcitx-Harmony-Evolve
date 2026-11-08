@@ -36,6 +36,9 @@ void scroll(int start, int count);
 // Reload config if the settings page changed it. Returns whether it did.
 bool reloadConfigIfChanged(const std::string &shared);
 void save(const std::string &shared);
+// Apply dictionaries, custom phrases, quick phrases and punctuation edited by the settings page.
+bool syncDataIfChanged(const std::string &shared);
+void runPinyinAction(const std::string &action);
 void triggerQuickPhrase();
 void triggerUnicode();
 // Google Pinyin user words, UTF-8 lines of "word\tpin'yin\tcount".

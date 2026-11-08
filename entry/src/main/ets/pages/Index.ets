@@ -1,50 +1,24 @@
 import { common } from '@kit.AbilityKit';
-import { fileIo as fs, picker } from '@kit.CoreFileKit';
+import { picker } from '@kit.CoreFileKit';
+import { readBytes, writeBytes } from '../common/Files';
 import {
   decode, DEFAULT_FILE_NAME, fromTsv, parse, toGooglePinyinBytes, toTsv
 } from '../common/GooglePinyinUserDict';
 import {
-  ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath,
-  fileMtime, readText, saveSettings, ThemeMode, userWordsSnapshotPath, VibrationStrength, writeText
+  ImportResult, importResultPath, pendingImportPath, pendingSkippedPath, fileMtime, readText,
+  userWordsSnapshotPath, writeText
 } from '../common/Settings';
 import { fcitxLocale } from '../common/Locale';
 import fcitx from 'libentry.so';
 import { AddonsPage } from './settings/AddonsPage';
 import { ConfigPage, ConfigPageParam } from './settings/ConfigPage';
 import { InputMethodsPage } from './settings/InputMethodsPage';
-
-const THEMES: ThemeMode[] = ['system', 'light', 'dark']
-const THEME_NAMES: string[] = ['跟随系统', '浅色', '深色']
-const STRENGTHS: VibrationStrength[] = ['light', 'medium', 'heavy']
-const STRENGTH_NAMES: string[] = ['轻', '中', '强']
-
-function readBytes(uri: string): Uint8Array {
-  const file = fs.openSync(uri, fs.OpenMode.READ_ONLY)
-  try {
-    const size = fs.statSync(file.fd).size
-    const buffer = new ArrayBuffer(size)
-    let offset = 0
-    while (offset < size) {
-      const n = fs.readSync(file.fd, buffer, { offset: offset, length: size - offset })
-      if (n <= 0) {
-        break
-      }
-      offset += n
-    }
-    return new Uint8Array(buffer, 0, offset)
-  } finally {
-    fs.closeSync(file)
-  }
-}
-
-function writeBytes(uri: string, bytes: Uint8Array) {
-  const file = fs.openSync(uri, fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC)
-  try {
-    fs.writeSync(file.fd, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
-  } finally {
-    fs.closeSync(file)
-  }
-}
+import { BackupPage } from './settings/BackupPage';
+import { ClipboardSyncPage } from './settings/ClipboardSyncPage';
+import { KeyboardPage } from './settings/KeyboardPage';
+import { PinyinDictPage } from './settings/PinyinDictPage';
+import { QuickPhrasePage } from './settings/QuickPhrasePage';
+import { TextFilePage, TextFilePageParam, textFileParam } from './settings/TextFilePage';
 
 @Entry
 @Component
@@ -53,7 +27,6 @@ struct Index {
   // Shared with the input method, see Settings.ets.
   private filesDir: string = this.context.distributedFilesDir
   @Provide('settingsStack') stack: NavPathStack = new NavPathStack()
-  @State settings: KeyboardSettings = loadSettings(this.filesDir)
   @State dictStatus: string = ''
 
   aboutToAppear() {
@@ -63,12 +36,15 @@ struct Index {
   }
 
   onPageShow() {
-    this.settings = loadSettings(this.filesDir)
     this.updateDictStatus()
   }
 
   private open(name: string, param?: ConfigPageParam) {
     this.stack.pushPathByName(name, param ?? null)
+  }
+
+  private openTextFile(kind: string) {
+    this.stack.pushPathByName('textFile', textFileParam(kind))
   }
 
   @Builder
@@ -79,6 +55,18 @@ struct Index {
       AddonsPage()
     } else if (name === 'inputMethods') {
       InputMethodsPage()
+    } else if (name === 'keyboard') {
+      KeyboardPage()
+    } else if (name === 'pinyinDict') {
+      PinyinDictPage()
+    } else if (name === 'quickPhrase') {
+      QuickPhrasePage()
+    } else if (name === 'textFile') {
+      TextFilePage({ param: param as TextFilePageParam })
+    } else if (name === 'backup') {
+      BackupPage()
+    } else if (name === 'clipboardSync') {
+      ClipboardSyncPage()
     }
   }
 
@@ -98,14 +86,6 @@ struct Index {
     .width('100%')
     .padding({ left: 16, right: 16, top: 12, bottom: 12 })
     .onClick(onClick)
-  }
-
-  private save() {
-    try {
-      saveSettings(this.filesDir, this.settings)
-    } catch (e) {
-      console.error(`Failed to save settings: ${e}`)
-    }
   }
 
   private updateDictStatus() {
@@ -180,17 +160,6 @@ struct Index {
       .padding({ left: 16, top: 16, bottom: 8 })
   }
 
-  @Builder
-  toggleRow(label: string, isOn: boolean, onChange: (isOn: boolean) => void) {
-    Row() {
-      Text(label).fontSize(16).layoutWeight(1)
-      Toggle({ type: ToggleType.Switch, isOn: isOn })
-        .onChange(onChange)
-    }
-    .width('100%')
-    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-  }
-
   build() {
     Navigation(this.stack) {
     Scroll() {
@@ -212,42 +181,16 @@ struct Index {
         this.linkRow('全局选项', '快捷键、行为', (): void => this.open('config', { uri: 'global', title: '全局选项' }))
         this.linkRow('附加组件', '标点、快速输入、云拼音等', (): void => this.open('addons'))
 
-        this.sectionTitle('外观')
-        Row() {
-          Text('主题').fontSize(16).layoutWeight(1)
-          Select(THEME_NAMES.map((name: string): SelectOption => ({ value: name })))
-            .selected(THEMES.indexOf(this.settings.theme))
-            .value(THEME_NAMES[THEMES.indexOf(this.settings.theme)])
-            .onSelect((index: number) => {
-              this.settings.theme = THEMES[index]
-              this.save()
-            })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-        this.toggleRow('按键边框', this.settings.keyBorder, (isOn: boolean) => {
-          this.settings.keyBorder = isOn
-          this.save()
-        })
+        this.sectionTitle('词库')
+        this.linkRow('拼音词库', '导入搜狗、libime 词库，清除学到的词', (): void => this.open('pinyinDict'))
+        this.linkRow('自定义短语', '用缩写输入固定内容', (): void => this.openTextFile('customPhrase'))
+        this.linkRow('快速输入', '长按逗号键使用的短语列表', (): void => this.open('quickPhrase'))
+        this.linkRow('标点', '中文标点映射', (): void => this.openTextFile('punctuation'))
 
-        this.sectionTitle('按键')
-        this.toggleRow('按键振动', this.settings.vibrate, (isOn: boolean) => {
-          this.settings.vibrate = isOn
-          this.save()
-        })
-        Row() {
-          Text('振动强度').fontSize(16).layoutWeight(1)
-          Select(STRENGTH_NAMES.map((name: string): SelectOption => ({ value: name })))
-            .selected(STRENGTHS.indexOf(this.settings.vibrationStrength))
-            .value(STRENGTH_NAMES[STRENGTHS.indexOf(this.settings.vibrationStrength)])
-            .enabled(this.settings.vibrate)
-            .onSelect((index: number) => {
-              this.settings.vibrationStrength = STRENGTHS[index]
-              this.save()
-            })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+        this.sectionTitle('键盘')
+        this.linkRow('主题与键盘', '主题、高度、按键间距、振动、按键音', (): void => this.open('keyboard'))
+        this.linkRow('剪贴板同步', '与局域网内的电脑同步剪贴板', (): void => this.open('clipboardSync'))
+        this.linkRow('备份与恢复', '导出设置和词库，或恢复安卓版的备份', (): void => this.open('backup'))
 
         this.sectionTitle('谷歌拼音用户词库')
         Text('在谷歌拼音中导出用户字典（user-dictionary.txt），再在这里导入。' +

@@ -107,6 +107,38 @@ API(save) {
     return {};
 }
 
+API(syncDataIfChanged) {
+    GET_ARGS(1)
+    GET_STRING(shared, 0)
+    fcitx::syncDataIfChanged(shared);
+    return {};
+}
+
+API(runPinyinAction) {
+    GET_ARGS(1)
+    GET_STRING(action, 0)
+    fcitx::runPinyinAction(action);
+    return {};
+}
+
+API(convertPinyinDict) {
+    GET_ARGS(3)
+    GET_STRING(src, 0)
+    GET_STRING(dest, 1)
+    GET_BOOL(toBinary, 2)
+    napi_value ret;
+    napi_get_boolean(env, fcitx::convertPinyinDict(src, dest, toBinary), &ret);
+    return ret;
+}
+
+API(readPinyinUserWords) {
+    GET_ARGS(2)
+    GET_STRING(dictPath, 0)
+    GET_STRING(historyPath, 1)
+    STRING(ret, fcitx::readPinyinUserWords(dictPath, historyPath))
+    return ret;
+}
+
 API(triggerQuickPhrase) {
     fcitx::triggerQuickPhrase();
     return {};
@@ -232,6 +264,10 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"save", nullptr, save, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"reloadConfigIfChanged", nullptr, reloadConfigIfChanged, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"triggerQuickPhrase", nullptr, triggerQuickPhrase, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"readPinyinUserWords", nullptr, readPinyinUserWords, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"syncDataIfChanged", nullptr, syncDataIfChanged, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"runPinyinAction", nullptr, runPinyinAction, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"convertPinyinDict", nullptr, convertPinyinDict, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"triggerUnicode", nullptr, triggerUnicode, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"initSettings", nullptr, initSettings, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getConfig", nullptr, getConfig, nullptr, nullptr, nullptr, napi_default, nullptr},

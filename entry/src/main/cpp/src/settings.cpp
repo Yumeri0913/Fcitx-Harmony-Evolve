@@ -13,6 +13,8 @@
 #include <fcitx/inputmethodgroup.h>
 #include <fcitx/inputmethodmanager.h>
 #include <fcitx/instance.h>
+#include <fstream>
+#include <libime/pinyin/pinyindictionary.h>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <sys/stat.h>
@@ -232,5 +234,20 @@ void setEnabledInputMethods(const std::string &names) {
     }
     imMgr.setGroup(std::move(group));
     imMgr.save();
+}
+
+bool convertPinyinDict(const std::string &src, const std::string &dest, bool toBinary) {
+    try {
+        libime::PinyinDictionary dict;
+        dict.load(libime::PinyinDictionary::SystemDict, src.c_str(),
+                  toBinary ? libime::PinyinDictFormat::Text : libime::PinyinDictFormat::Binary);
+        std::ofstream out(dest, std::ios::out | std::ios::binary | std::ios::trunc);
+        dict.save(libime::PinyinDictionary::SystemDict, out,
+                  toBinary ? libime::PinyinDictFormat::Binary : libime::PinyinDictFormat::Text);
+        return static_cast<bool>(out);
+    } catch (const std::exception &e) {
+        FCITX_ERROR() << "Failed to convert " << src << ": " << e.what();
+        return false;
+    }
 }
 } // namespace fcitx

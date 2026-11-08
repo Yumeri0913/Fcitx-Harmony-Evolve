@@ -40,10 +40,10 @@ index 0000000..1cb8fed
 +  lmdb: false
 +  msgpackr-extract: false
 diff --git a/src/api.d.ts b/src/api.d.ts
-index 23fc6d3..9691ba8 100644
+index 23fc6d3..74c8503 100644
 --- a/src/api.d.ts
 +++ b/src/api.d.ts
-@@ -23,6 +23,19 @@ export interface CandidateAction {
+@@ -23,6 +23,25 @@ export interface CandidateAction {
    text: string
  }
  
@@ -52,6 +52,12 @@ index 23fc6d3..9691ba8 100644
 +  theme: 'system' | 'light' | 'dark'
 +  // Google Pinyin 按键边框: key tiles, or only labels when off.
 +  keyBorder: boolean
++  // px, fcitx5-android's key margins and radius.
++  keyMarginX: number
++  keyMarginY: number
++  keyRadius: number
++  // fcitx5-android's popup on key press.
++  popupOnKeyPress: boolean
 +}
 +
 +export interface ClipboardEntry {
@@ -63,7 +69,7 @@ index 23fc6d3..9691ba8 100644
  export const SCROLL_NONE = 0
  export const SCROLL_READY = 1
  export const SCROLLING = 2
-@@ -62,6 +75,12 @@ export type SystemEvent = {
+@@ -62,6 +81,12 @@ export type SystemEvent = {
  } | {
    type: 'STATUS_AREA'
    data: StatusAreaAction[]
@@ -76,7 +82,7 @@ index 23fc6d3..9691ba8 100644
  } | {
    type: 'INPUT_METHODS'
    data: {
-@@ -81,10 +100,20 @@ export type VirtualKeyboardEvent = {
+@@ -81,10 +106,20 @@ export type VirtualKeyboardEvent = {
    data: string
  } | {
    type: 'UNDO' | 'REDO' | 'CUT' | 'COPY' | 'PASTE' | 'COLLAPSE'
@@ -713,10 +719,10 @@ index 8a28451..6b8b188 100644
        container.setAttribute(DATA_KEY, dataKey)
        break
 diff --git a/src/keyboard.ts b/src/keyboard.ts
-index 9cbf8f1..f2c6dd0 100644
+index 9cbf8f1..7740fc1 100644
 --- a/src/keyboard.ts
 +++ b/src/keyboard.ts
-@@ -1,20 +1,56 @@
+@@ -1,20 +1,67 @@
 -import type { SystemEvent } from './api'
 +import type { KeyboardConfig, SystemEvent } from './api'
  import type { BUILTIN_LAYOUT, Layout } from './layout'
@@ -738,7 +744,7 @@ index 9cbf8f1..f2c6dd0 100644
 +import { enableRedo, enableUndo, renderToolbar, setCurrentInputMethod } from './toolbar'
  import { div, hide, isAndroidOrIOS, isFirefox } from './util'
 -import { onTouchEnd, onTouchMove, onTouchStart, setEnterKeyType, setInputMethods, setLayer, setLayout as setLayout_ } from './ux'
-+import { haptic, onTouchEnd, onTouchMove, onTouchStart, setEnterKeyType, setInputMethods, setLayer, setLayout as setLayout_ } from './ux'
++import { haptic, onTouchEnd, onTouchMove, onTouchStart, setEnterKeyType, setInputMethods, setLayer, setLayout as setLayout_, setPopupOnKeyPress } from './ux'
 +
 +const builtInLayoutMap = { qwerty, googlepinyin: googlePinyinLayout } as { [key: string]: Layout }
 +
@@ -759,8 +765,16 @@ index 9cbf8f1..f2c6dd0 100644
 +  '.fcitx-keyboard-clipboard-button',
 +].join(',')
 +
-+let config_: KeyboardConfig = { theme: 'system', keyBorder: false }
-+
++let config_: KeyboardConfig = {
++  theme: 'system',
++  keyBorder: false,
++  keyMarginX: 3,
++  keyMarginY: 7,
++  keyRadius: 2,
++  popupOnKeyPress: true,
++}
+ 
+-const builtInLayoutMap = { qwerty } as { [key: string]: Layout }
 +function applyConfig() {
 +  const container = document.querySelector('.fcitx-keyboard-container') as HTMLElement | null
 +  if (!container) {
@@ -768,9 +782,12 @@ index 9cbf8f1..f2c6dd0 100644
 +  }
 +  container.setAttribute('data-theme', config_.theme)
 +  container.classList.toggle('fcitx-keyboard-borderless', !config_.keyBorder)
++  container.style.setProperty('--fcitx-key-margin-x', `${config_.keyMarginX}px`)
++  container.style.setProperty('--fcitx-key-margin-y', `${config_.keyMarginY}px`)
++  container.style.setProperty('--fcitx-key-radius', `${config_.keyRadius}px`)
++  setPopupOnKeyPress(config_.popupOnKeyPress)
 +}
- 
--const builtInLayoutMap = { qwerty } as { [key: string]: Layout }
++
 +export function setConfig(config: KeyboardConfig) {
 +  config_ = config
 +  applyConfig()
@@ -778,7 +795,7 @@ index 9cbf8f1..f2c6dd0 100644
  
  export function setLayout(id: string, layout: Layout) {
    setLayout_(layout)
-@@ -47,6 +83,12 @@ export function setLayout(id: string, layout: Layout) {
+@@ -47,6 +94,12 @@ export function setLayout(id: string, layout: Layout) {
    const symbol = renderSymbolSelector()
    symbol.classList.add('fcitx-keyboard-frame')
  
@@ -791,7 +808,7 @@ index 9cbf8f1..f2c6dd0 100644
    const contextmenu = renderContextmenu()
    hide(contextmenu)
  
-@@ -66,12 +108,20 @@ export function setLayout(id: string, layout: Layout) {
+@@ -66,12 +119,20 @@ export function setLayout(id: string, layout: Layout) {
      editor,
      statusArea,
      symbol,
@@ -812,7 +829,7 @@ index 9cbf8f1..f2c6dd0 100644
    if (isAndroidOrIOS) {
      // Disable iOS Safari select text.
      // Ideally Android doesn't need this, but default behavior of touchstart will cause input blur.
-@@ -84,6 +134,7 @@ export function setLayout(id: string, layout: Layout) {
+@@ -84,6 +145,7 @@ export function setLayout(id: string, layout: Layout) {
    const app = document.getElementById(id)!
    app.innerHTML = ''
    app.appendChild(container)
@@ -820,7 +837,7 @@ index 9cbf8f1..f2c6dd0 100644
    setDisplayMode('initial')
    if (isFirefox) {
      // Firefox is buggy if render synchronously.
-@@ -108,6 +159,10 @@ export function onMessage(message: string) {
+@@ -108,6 +170,10 @@ export function onMessage(message: string) {
        break
      case 'HIDE':
        setLayer('default', false)
@@ -831,7 +848,7 @@ index 9cbf8f1..f2c6dd0 100644
      // fall through
      case 'CLEAR':
        hideContextMenu()
-@@ -127,6 +182,13 @@ export function onMessage(message: string) {
+@@ -127,6 +193,13 @@ export function onMessage(message: string) {
        break
      case 'INPUT_METHODS':
        setInputMethods(event.data.inputMethods, event.data.currentInputMethod)
@@ -1789,7 +1806,7 @@ index 363a40c..d05cd19 100644
 +  return navigator.language.startsWith('zh') ? zh : en
 +}
 diff --git a/src/ux.ts b/src/ux.ts
-index 892f0e9..c44449c 100644
+index 892f0e9..13609dd 100644
 --- a/src/ux.ts
 +++ b/src/ux.ts
 @@ -12,7 +12,7 @@ import { renderRow } from './key'
@@ -1801,7 +1818,16 @@ index 892f0e9..c44449c 100644
  
  let layout_: Layout
  let currentLayer = 'default'
-@@ -28,10 +28,14 @@ const touches: { [key: string]: {
+@@ -24,14 +24,23 @@ let keyPressedWithShiftPressed = false
+ let enterKeyType = ''
+ let spaceKeyLabel = ''
+ let inputMethods_: InputMethod[] = []
++let popupOnKeyPress = true
++
++export function setPopupOnKeyPress(enabled: boolean) {
++  popupOnKeyPress = enabled
++}
+ const touches: { [key: string]: {
    touch: Touch
    state: TouchState
    timer: number | null
@@ -1816,7 +1842,7 @@ index 892f0e9..c44449c 100644
    startX: number
    startY: number
    lastX: number
-@@ -41,6 +45,7 @@ const slideStep = 10
+@@ -41,6 +50,7 @@ const slideStep = 10
  
  const DOUBLE_TAP_INTERVAL = 300 // Same with f5a.
  export const LONG_PRESS_THRESHOLD = 300
@@ -1824,7 +1850,7 @@ index 892f0e9..c44449c 100644
  export const DRAG_THRESHOLD = 10 // radius^2
  const SWIPE_THRESHOLD = 10
  
-@@ -60,6 +65,21 @@ function cancelLongPress(touchId: number) {
+@@ -60,6 +70,21 @@ function cancelLongPress(touchId: number) {
    }
  }
  
@@ -1846,7 +1872,7 @@ index 892f0e9..c44449c 100644
  export function setLayout(layout: Layout) {
    layout_ = layout
  }
-@@ -74,6 +94,11 @@ export function sendEvent(event: VirtualKeyboardEvent) {
+@@ -74,6 +99,11 @@ export function sendEvent(event: VirtualKeyboardEvent) {
    client_.sendEvent(event)
  }
  
@@ -1858,7 +1884,7 @@ index 892f0e9..c44449c 100644
  export function undo() {
    sendEvent({ type: 'UNDO' })
  }
-@@ -155,6 +180,9 @@ function touchDown(touch: Touch) {
+@@ -155,6 +185,9 @@ function touchDown(touch: Touch) {
      case 'globe':
        sendEvent({ type: 'GLOBE' })
        break
@@ -1868,7 +1894,7 @@ index 892f0e9..c44449c 100644
    }
  }
  
-@@ -187,6 +215,7 @@ function interrupt(touchId: number) {
+@@ -187,6 +220,7 @@ function interrupt(touchId: number) {
        case 'DOWN':
          break
        default:
@@ -1876,7 +1902,7 @@ index 892f0e9..c44449c 100644
          touches[id].state = 'INTERRUPTED'
          hidePopover()
      }
-@@ -194,10 +223,13 @@ function interrupt(touchId: number) {
+@@ -194,10 +228,13 @@ function interrupt(touchId: number) {
  }
  
  function getSwipe(touch: Touch) {
@@ -1891,7 +1917,7 @@ index 892f0e9..c44449c 100644
    return undefined
  }
  
-@@ -250,18 +282,31 @@ function swipeRelease(touch: Touch) {
+@@ -250,18 +287,31 @@ function swipeRelease(touch: Touch) {
    }
  }
  
@@ -1928,7 +1954,7 @@ index 892f0e9..c44449c 100644
    }
  }
  
-@@ -288,24 +333,32 @@ export function onTouchStart(event: TouchEvent) {
+@@ -288,24 +338,34 @@ export function onTouchStart(event: TouchEvent) {
    let container = getContainer(touch)
    const key = getKey(container)
    let swipeUp: Swipe | undefined
@@ -1956,7 +1982,9 @@ index 892f0e9..c44449c 100644
            longPress = key.longPress
          }
 +        // Preview the key above the finger, fcitx5-android's popup on key press.
-+        showPopover(container!, key.label)
++        if (popupOnKeyPress) {
++          showPopover(container!, key.label)
++        }
 +        break
 +      case 'space':
 +        timer = window.setTimeout(longPressHandler, LONG_PRESS_THRESHOLD, touch.identifier)
@@ -1966,7 +1994,7 @@ index 892f0e9..c44449c 100644
          break
      }
    }
-@@ -316,8 +369,11 @@ export function onTouchStart(event: TouchEvent) {
+@@ -316,8 +376,11 @@ export function onTouchStart(event: TouchEvent) {
      touch,
      state,
      timer,
@@ -1978,7 +2006,7 @@ index 892f0e9..c44449c 100644
      longPress,
      index: longPress?.index ?? 0,
      startX: touch.clientX,
-@@ -343,7 +399,9 @@ export function onTouchMove(event: TouchEvent) {
+@@ -343,7 +406,9 @@ export function onTouchMove(event: TouchEvent) {
        doSwipe(touch)
        break
      case 'PRESSING':
@@ -1989,7 +2017,7 @@ index 892f0e9..c44449c 100644
        break
    }
  }
-@@ -352,12 +410,14 @@ export function onTouchEnd(event: TouchEvent) {
+@@ -352,12 +417,14 @@ export function onTouchEnd(event: TouchEvent) {
    const touchId = event.changedTouches[0].identifier
    interrupt(touchId)
    cancelLongPress(touchId)
@@ -2004,7 +2032,7 @@ index 892f0e9..c44449c 100644
        touchDown(touch)
        // fall through
      case 'DOWN':
-@@ -375,11 +435,18 @@ export function onTouchEnd(event: TouchEvent) {
+@@ -375,11 +442,18 @@ export function onTouchEnd(event: TouchEvent) {
        }
        break
      case 'PRESSING':
@@ -2025,7 +2053,7 @@ index 892f0e9..c44449c 100644
  }
  
  export function setLayer(id: string, locked: boolean) {
-@@ -438,11 +505,20 @@ export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
+@@ -438,11 +512,20 @@ export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
    }
  }
  

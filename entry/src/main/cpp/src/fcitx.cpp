@@ -219,6 +219,7 @@ void init(const std::string &bundle, const std::string &resfile, const std::stri
         setInputMethods({"keyboard-us", "pinyin"});
     }
     configSignature_ = configSignature(shared);
+    syncDataIfChanged(shared);
 }
 
 void focusIn(bool clientPreedit) {
@@ -358,11 +359,10 @@ void scroll(int start, int count) {
     with_fcitx([=] { ui->scroll(start, count); });
 }
 
-// Changes when the settings page writes any file of the config dir.
-size_t configSignature(const std::string &shared) {
+static size_t treeSignature(const ::fs::path &root) {
     size_t signature = 0;
     std::error_code ec;
-    for (::fs::recursive_directory_iterator it(configHome(shared), ec), end; !ec && it != end; it.increment(ec)) {
+    for (::fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
         if (!it->is_regular_file(ec)) {
             continue;
         }
@@ -373,6 +373,62 @@ size_t configSignature(const std::string &shared) {
     return signature;
 }
 
+// Changes when the settings page writes any file of the config dir.
+size_t configSignature(const std::string &shared) { return treeSignature(configHome(shared)); }
+
+// Files the settings page edits, relative to fcitx's user data dir. The page writes them
+// to a mirror in the shared dir; learned words (pinyin/user.*) stay private.
+static const char *const editableData[] = {"pinyin/dictionaries", "pinyin/customphrase", "data/quickphrase.d",
+                                           "punctuation"};
+
+static ::fs::path sharedData(const std::string &shared) { return ::fs::path(shared) / "data" / "fcitx5"; }
+
+static size_t dataSignature_ = 0;
+
+// Copy the mirror over the private data and reload what uses it.
+bool syncDataIfChanged(const std::string &shared) {
+    auto signature = treeSignature(sharedData(shared));
+    if (signature == dataSignature_) {
+        return false;
+    }
+    dataSignature_ = signature;
+    with_fcitx([&shared] {
+        auto userData = StandardPaths::global().userDirectory(StandardPathsType::PkgData);
+        for (const char *item : editableData) {
+            auto from = sharedData(shared) / item;
+            auto to = userData / item;
+            std::error_code ec;
+            ::fs::remove_all(to, ec);
+            if (::fs::exists(from, ec)) {
+                ::fs::create_directories(to.parent_path(), ec);
+                ::fs::copy(from, to, ::fs::copy_options::recursive, ec);
+                if (ec) {
+                    FCITX_ERROR() << "Failed to copy " << from << ": " << ec.message();
+                }
+            }
+        }
+        auto &addonManager = instance->addonManager();
+        if (auto *pinyin = addonManager.addon("pinyin")) {
+            pinyin->setSubConfig("dictmanager", RawConfig{});
+            pinyin->setSubConfig("customphrase", RawConfig{});
+        }
+        for (const char *name : {"quickphrase", "punctuation"}) {
+            if (auto *addon = addonManager.addon(name)) {
+                addon->reloadConfig();
+            }
+        }
+    });
+    return true;
+}
+
+// Actions the settings page can't do itself, e.g. clearuserdict and clearalldict of pinyin.
+void runPinyinAction(const std::string &action) {
+    with_fcitx([&action] {
+        if (auto *pinyin = instance->addonManager().addon("pinyin", true)) {
+            pinyin->setSubConfig(action, RawConfig{});
+        }
+    });
+}
 
 bool reloadConfigIfChanged(const std::string &shared) {
     auto signature = configSignature(shared);
@@ -399,8 +455,20 @@ bool reloadConfigIfChanged(const std::string &shared) {
 void save(const std::string &shared) {
     // Saving writes configs from memory: apply the settings page's changes first.
     reloadConfigIfChanged(shared);
+    syncDataIfChanged(shared);
     with_fcitx([] { instance->save(); });
     configSignature_ = configSignature(shared);
+    // Custom phrases pinned or deleted from candidates go back to the settings page's copy.
+    std::error_code ec;
+    auto userData = StandardPaths::global().userDirectory(StandardPathsType::PkgData);
+    auto ours = userData / "pinyin" / "customphrase";
+    auto theirs = sharedData(shared) / "pinyin" / "customphrase";
+    if (::fs::exists(ours, ec) &&
+        (!::fs::exists(theirs, ec) || ::fs::last_write_time(ours, ec) > ::fs::last_write_time(theirs, ec))) {
+        ::fs::create_directories(theirs.parent_path(), ec);
+        ::fs::copy_file(ours, theirs, ::fs::copy_options::overwrite_existing, ec);
+        dataSignature_ = treeSignature(sharedData(shared));
+    }
 }
 
 // From the comma key menu, like fcitx5-android.

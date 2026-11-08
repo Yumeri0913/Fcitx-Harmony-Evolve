@@ -4,6 +4,10 @@ import { inputMethodEngine } from '@kit.IMEKit';
 import { display } from '@kit.ArkUI';
 import { KeyCode } from '@kit.InputKit';
 import { vibrator } from '@kit.SensorServiceKit';
+import { fileIo as fs } from '@kit.CoreFileKit';
+import { KeySound } from './KeySound';
+import { ClipboardSync } from './ClipboardSync';
+import { deviceInfo } from '@kit.BasicServicesKit';
 import {
   ClipboardEntry as WebClipboardEntry, SystemEvent, VirtualKeyboardEvent
 } from '../../../fcitx5-keyboard-web/src/api';
@@ -13,8 +17,9 @@ import { FcitxEvent } from './FcitxEvent';
 import { convertCode } from './keycode';
 import { onTextChange, redo, resetStacks, undo } from './TextOperation';
 import {
-  ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath,
-  readText, removeFile, userWordsSnapshotPath, writeText
+  ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingPinyinActionsPath,
+  pendingSkippedPath,
+  readText, removeFile, userDataCopyPath, userWordsSnapshotPath, writeText, clipboardSyncId, clipboardSyncAccessPath
 } from '../../common/Settings';
 
 // Writing the user words snapshot reads all of history, so not on every hide.
@@ -89,6 +94,10 @@ export class KeyboardController {
   private hapticPresetSupported = true
   private lastSnapshotTime = 0
   private clipboard = new ClipboardStore()
+  private keySound = new KeySound()
+  private clipboardSync: ClipboardSync | null = null
+  private panelHeight = 0
+  private filesDir = ''
 
   constructor() {
   }
@@ -101,6 +110,7 @@ export class KeyboardController {
     this.ctx = context;
     this.sharedDir = context.distributedFilesDir
     this.clipboard.load(context.filesDir)
+    this.filesDir = context.filesDir
     this.loadSettings()
     this.initWindow();
     this.registerListener();
@@ -451,12 +461,6 @@ export class KeyboardController {
       return;
     }
     // 1260x2720 on emulator
-    const defaultDisplay = display.getDefaultDisplaySync()
-    const width = defaultDisplay.width
-    const height = defaultDisplay.height
-    const density = defaultDisplay.densityPixels
-    const bodyHeight = googlePinyinBodyHeight(Math.min(width, height) / density, width > height)
-    const containerHeight = Math.round((bodyHeight + BAR_HEIGHT) * density)
     let panelInfo: inputMethodEngine.PanelInfo = {
       type: inputMethodEngine.PanelType.SOFT_KEYBOARD,
       flag: inputMethodEngine.PanelFlag.FLG_FIXED
@@ -467,7 +471,10 @@ export class KeyboardController {
         console.debug('show')
         // Settings may have been changed in the main app.
         this.loadSettings()
+        this.resizePanel()
         fcitx.reloadConfigIfChanged(this.sharedDir)
+        fcitx.syncDataIfChanged(this.sharedDir)
+        this.runPendingPinyinActions()
         this.applyPendingImport()
       })
       this.panel.on('hide', () => {
@@ -479,7 +486,7 @@ export class KeyboardController {
         fcitx.save(this.sharedDir)
         this.writeUserWordsSnapshot(false)
       })
-      this.panel.resize(width, containerHeight)
+      this.resizePanel()
       this.panel.setUiContent('InputMethodExtensionAbility/pages/VirtualKeyboard')
     })
   }
@@ -520,7 +527,80 @@ export class KeyboardController {
   private loadSettings() {
     const settings = loadSettings(this.sharedDir)
     this.settings = settings
-    this.sendEvent({ type: 'CONFIG', data: { theme: settings.theme, keyBorder: settings.keyBorder } })
+    if (settings.keySound) {
+      this.keySound.init(this.filesDir)
+    }
+    this.updateClipboardSync(settings.clipboardSync)
+    this.sendEvent({
+      type: 'CONFIG', data: {
+        theme: settings.theme,
+        keyBorder: settings.keyBorder,
+        keyMarginX: settings.keyMarginX,
+        keyMarginY: settings.keyMarginY,
+        keyRadius: settings.keyRadius,
+        popupOnKeyPress: settings.popupOnKeyPress,
+      }
+    })
+  }
+
+  private updateClipboardSync(enabled: boolean) {
+    if (enabled && !this.clipboardSync) {
+      try {
+        this.clipboardSync = new ClipboardSync(this.clipboard, clipboardSyncId(this.sharedDir),
+          deviceInfo.marketName || deviceInfo.productModel, (): void => this.sendClipboard(), (): void => {
+            writeText(clipboardSyncAccessPath(this.sharedDir), `${Date.now()}`)
+          })
+        this.clipboardSync.start()
+      } catch (e) {
+        console.error(`Failed to start clipboard sync: ${e}`)
+      }
+    } else if (!enabled && this.clipboardSync) {
+      this.clipboardSync.stop()
+      this.clipboardSync = null
+    }
+  }
+
+  // Google Pinyin's height or a percentage of the screen, like fcitx5-android (InsightKey).
+  private resizePanel() {
+    if (!this.panel) {
+      return
+    }
+    const defaultDisplay = display.getDefaultDisplaySync()
+    const width = defaultDisplay.width
+    const height = defaultDisplay.height
+    const density = defaultDisplay.densityPixels
+    const landscape = width > height
+    const settings = this.settings
+    let bodyHeight: number
+    if (settings && settings.heightMode === 'percent') {
+      const percent = landscape ? settings.heightPercentLandscape : settings.heightPercentPortrait
+      bodyHeight = height / density * percent / 100
+    } else {
+      bodyHeight = googlePinyinBodyHeight(Math.min(width, height) / density, landscape)
+    }
+    const panelHeight = Math.round((bodyHeight + BAR_HEIGHT) * density)
+    if (panelHeight !== this.panelHeight) {
+      this.panelHeight = panelHeight
+      this.panel.resize(width, panelHeight)
+    }
+  }
+
+  // Queued by the settings page, which runs a separate fcitx without the learned words.
+  private runPendingPinyinActions() {
+    const path = pendingPinyinActionsPath(this.sharedDir)
+    const text = readText(path)
+    if (text === null) {
+      return
+    }
+    removeFile(path)
+    try {
+      for (const action of JSON.parse(text) as string[]) {
+        fcitx.runPinyinAction(action)
+      }
+      this.writeUserWordsSnapshot(true)
+    } catch (e) {
+      console.error(`Invalid pinyin actions: ${e}`)
+    }
   }
 
   // The main app can't read fcitx's user data, so leave a copy for its export.
@@ -532,6 +612,15 @@ export class KeyboardController {
     this.lastSnapshotTime = now
     try {
       writeText(userWordsSnapshotPath(this.sharedDir), fcitx.exportGooglePinyinWords())
+      // Saved just before, for backups in the main app.
+      for (const file of ['user.dict', 'user.history']) {
+        const from = `${this.filesDir}/data/fcitx5/pinyin/${file}`
+        if (fs.accessSync(from)) {
+          const to = userDataCopyPath(this.sharedDir, file)
+          fs.mkdirSync(to.substring(0, to.lastIndexOf('/')), true)
+          fs.copyFileSync(from, to)
+        }
+      }
     } catch (e) {
       console.error(`Failed to write user words: ${e}`)
     }
@@ -540,6 +629,9 @@ export class KeyboardController {
   // Google Pinyin vibrates on touch down.
   private vibrate() {
     const settings = this.settings
+    if (settings && settings.keySound) {
+      this.keySound.play(settings.keySoundVolume / 100)
+    }
     if (!settings || !settings.vibrate) {
       return
     }

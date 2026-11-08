@@ -8,12 +8,30 @@ export type ThemeMode = 'system' | 'light' | 'dark'
 // Google Pinyin's vibration strengths, mapped to system haptic presets.
 export type VibrationStrength = 'light' | 'medium' | 'heavy'
 
+// fcitx5-android (InsightKey fork) KeyboardHeightMode.
+export type HeightMode = 'googlepinyin' | 'percent'
+
 export interface KeyboardSettings {
   theme: ThemeMode
   // Google Pinyin 按键边框. Off by default like Google Pinyin and fcitx5-android.
   keyBorder: boolean
   vibrate: boolean
   vibrationStrength: VibrationStrength
+  heightMode: HeightMode
+  // Percent of the screen height for the keys, in percent mode.
+  heightPercentPortrait: number
+  heightPercentLandscape: number
+  // vp, fcitx5-android's key margins and radius.
+  keyMarginX: number
+  keyMarginY: number
+  keyRadius: number
+  popupOnKeyPress: boolean
+  keySound: boolean
+  // 0 to 100.
+  keySoundVolume: number
+  // LAN clipboard sync of fcitx5-android (InsightKey fork). Off by default: it serves the
+  // clipboard history to the local network.
+  clipboardSync: boolean
 }
 
 export const DEFAULT_SETTINGS: KeyboardSettings = {
@@ -21,6 +39,16 @@ export const DEFAULT_SETTINGS: KeyboardSettings = {
   keyBorder: false,
   vibrate: true,
   vibrationStrength: 'light',
+  heightMode: 'googlepinyin',
+  heightPercentPortrait: 27,
+  heightPercentLandscape: 49,
+  keyMarginX: 3,
+  keyMarginY: 7,
+  keyRadius: 2,
+  popupOnKeyPress: true,
+  keySound: false,
+  keySoundVolume: 50,
+  clipboardSync: false,
 }
 
 export interface ImportResult {
@@ -52,6 +80,37 @@ export function pendingSkippedPath(sharedDir: string): string {
 
 export function importResultPath(sharedDir: string): string {
   return `${googlePinyinDir(sharedDir)}/import-result.json`
+}
+
+// Pinyin actions (e.g. clearuserdict) queued by the settings page, a JSON string array.
+export function pendingPinyinActionsPath(sharedDir: string): string {
+  return `${sharedDir}/requests/pinyin-actions.json`
+}
+
+// Mirror of fcitx's user data dir for files the settings page edits, see syncDataIfChanged.
+export function sharedDataPath(sharedDir: string, relative: string): string {
+  return `${sharedDir}/data/fcitx5/${relative}`
+}
+
+// Random id announced by LAN clipboard sync, shared so both processes use the same.
+export function clipboardSyncId(sharedDir: string): string {
+  const path = `${sharedDir}/clipboard-sync-id`
+  let id = readText(path)
+  if (!id) {
+    id = `harmony-${Math.random().toString(16).substring(2, 10)}${Date.now().toString(16)}`
+    writeText(path, id)
+  }
+  return id
+}
+
+// Written by the input method when a LAN client connects, which ends pairing.
+export function clipboardSyncAccessPath(sharedDir: string): string {
+  return `${sharedDir}/clipboard-sync-access`
+}
+
+// Copies of the input method's pinyin user.dict and user.history, for backups.
+export function userDataCopyPath(sharedDir: string, file: string): string {
+  return `${sharedDir}/userdata/pinyin/${file}`
 }
 
 // User words written by the input method when the keyboard hides, for export.
@@ -105,13 +164,28 @@ export function removeFile(path: string) {
   }
 }
 
+function numberIn(value: number, min: number, max: number, fallback: number): number {
+  return typeof value === 'number' && value >= min && value <= max ? value : fallback
+}
+
 export function loadSettings(sharedDir: string): KeyboardSettings {
   const text = readText(settingsPath(sharedDir))
+  const d = DEFAULT_SETTINGS
   const settings: KeyboardSettings = {
-    theme: DEFAULT_SETTINGS.theme,
-    keyBorder: DEFAULT_SETTINGS.keyBorder,
-    vibrate: DEFAULT_SETTINGS.vibrate,
-    vibrationStrength: DEFAULT_SETTINGS.vibrationStrength,
+    theme: d.theme,
+    keyBorder: d.keyBorder,
+    vibrate: d.vibrate,
+    vibrationStrength: d.vibrationStrength,
+    heightMode: d.heightMode,
+    heightPercentPortrait: d.heightPercentPortrait,
+    heightPercentLandscape: d.heightPercentLandscape,
+    keyMarginX: d.keyMarginX,
+    keyMarginY: d.keyMarginY,
+    keyRadius: d.keyRadius,
+    popupOnKeyPress: d.popupOnKeyPress,
+    keySound: d.keySound,
+    keySoundVolume: d.keySoundVolume,
+    clipboardSync: d.clipboardSync,
   }
   if (text === null) {
     return settings
@@ -130,6 +204,24 @@ export function loadSettings(sharedDir: string): KeyboardSettings {
     if (saved.vibrationStrength === 'light' || saved.vibrationStrength === 'medium' ||
       saved.vibrationStrength === 'heavy') {
       settings.vibrationStrength = saved.vibrationStrength
+    }
+    if (saved.heightMode === 'googlepinyin' || saved.heightMode === 'percent') {
+      settings.heightMode = saved.heightMode
+    }
+    settings.heightPercentPortrait = numberIn(saved.heightPercentPortrait, 10, 90, d.heightPercentPortrait)
+    settings.heightPercentLandscape = numberIn(saved.heightPercentLandscape, 10, 90, d.heightPercentLandscape)
+    settings.keyMarginX = numberIn(saved.keyMarginX, 0, 24, d.keyMarginX)
+    settings.keyMarginY = numberIn(saved.keyMarginY, 0, 24, d.keyMarginY)
+    settings.keyRadius = numberIn(saved.keyRadius, 0, 48, d.keyRadius)
+    settings.keySoundVolume = numberIn(saved.keySoundVolume, 0, 100, d.keySoundVolume)
+    if (typeof saved.popupOnKeyPress === 'boolean') {
+      settings.popupOnKeyPress = saved.popupOnKeyPress
+    }
+    if (typeof saved.keySound === 'boolean') {
+      settings.keySound = saved.keySound
+    }
+    if (typeof saved.clipboardSync === 'boolean') {
+      settings.clipboardSync = saved.clipboardSync
     }
   } catch (e) {
     console.error(`Invalid settings: ${e}`)
