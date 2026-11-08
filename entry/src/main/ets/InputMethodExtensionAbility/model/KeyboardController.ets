@@ -10,10 +10,13 @@ import { FcitxEvent } from './FcitxEvent';
 import { convertCode } from './keycode';
 import { onTextChange, redo, resetStacks, undo } from './TextOperation';
 import {
-  ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath, readText,
-  removeFile, writeText
+  fileMtime, ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath,
+  readText, removeFile, userWordsSnapshotPath, writeText
 } from '../../common/Settings';
-import { pinyinConfigMtime } from '../../common/PinyinConfig';
+import { pinyinConfigPath } from '../../common/PinyinConfig';
+
+// Writing the user words snapshot reads all of history, so not on every hide.
+const SNAPSHOT_INTERVAL = 60 * 1000
 
 // Google Pinyin 4.x keyboard_body_height in vp (from its 4.5.2 dimens.xml): the key area
 // below its 40 vp candidate bar, by smallest screen width bucket. Same as fcitx5-android
@@ -78,11 +81,13 @@ export class KeyboardController {
   private selecting = false
   private backspaceSelectionCount = 0
   private pendingEvents: SystemEvent[] = []
-  private filesDir = ''
+  // Shared with the main app, see Settings.ets.
+  private sharedDir = ''
   private settings: KeyboardSettings | null = null
   private hapticPresetSupported = true
-  // pinyin.conf as last read or written by this process.
+  // The main app's pinyin.conf as last applied.
   private pinyinConfigMtime = 0
+  private lastSnapshotTime = 0
 
   constructor() {
   }
@@ -93,7 +98,7 @@ export class KeyboardController {
       this.processAsyncData(data)
     })
     this.ctx = context;
-    this.filesDir = context.filesDir
+    this.sharedDir = context.distributedFilesDir
     this.loadSettings()
     this.initWindow();
     this.registerListener();
@@ -439,7 +444,7 @@ export class KeyboardController {
         console.debug('show')
         // Settings may have been changed in the main app.
         this.loadSettings()
-        this.reloadPinyinConfigIfChanged()
+        this.applyPinyinConfigIfChanged()
         this.applyPendingImport()
       })
       this.panel.on('hide', () => {
@@ -447,11 +452,11 @@ export class KeyboardController {
         this.processResult(fcitx.reset()) // Need it when dragging right edge to collapse keyboard.
         this.sendEvent({ type: 'HIDE' })
         // Persist learned words now instead of waiting for the periodic save, like
-        // fcitx5-android. The main app exports user words from the saved files.
-        // Saving also writes configs from memory, so pick up the main app's changes first.
-        this.reloadPinyinConfigIfChanged()
+        // fcitx5-android. Saving also writes configs from memory, so pick up the main
+        // app's changes first.
+        this.applyPinyinConfigIfChanged()
         fcitx.save()
-        this.pinyinConfigMtime = pinyinConfigMtime(this.filesDir)
+        this.writeUserWordsSnapshot(false)
       })
       this.panel.resize(width, containerHeight)
       this.panel.setUiContent('InputMethodExtensionAbility/pages/VirtualKeyboard')
@@ -459,16 +464,31 @@ export class KeyboardController {
   }
 
   private loadSettings() {
-    const settings = loadSettings(this.filesDir)
+    const settings = loadSettings(this.sharedDir)
     this.settings = settings
     this.sendEvent({ type: 'CONFIG', data: { theme: settings.theme, keyBorder: settings.keyBorder } })
   }
 
-  private reloadPinyinConfigIfChanged() {
-    const mtime = pinyinConfigMtime(this.filesDir)
-    if (mtime !== this.pinyinConfigMtime) {
-      fcitx.reloadPinyinConfig()
+  private applyPinyinConfigIfChanged() {
+    const path = pinyinConfigPath(this.sharedDir)
+    const mtime = fileMtime(path)
+    if (mtime !== 0 && mtime !== this.pinyinConfigMtime) {
+      fcitx.applyPinyinConfig(path)
       this.pinyinConfigMtime = mtime
+    }
+  }
+
+  // The main app can't read fcitx's user data, so leave a copy for its export.
+  private writeUserWordsSnapshot(force: boolean) {
+    const now = Date.now()
+    if (!force && now - this.lastSnapshotTime < SNAPSHOT_INTERVAL) {
+      return
+    }
+    this.lastSnapshotTime = now
+    try {
+      writeText(userWordsSnapshotPath(this.sharedDir), fcitx.exportGooglePinyinWords())
+    } catch (e) {
+      console.error(`Failed to write user words: ${e}`)
     }
   }
 
@@ -507,7 +527,7 @@ export class KeyboardController {
   }
 
   private mergePendingImport() {
-    const path = pendingImportPath(this.filesDir)
+    const path = pendingImportPath(this.sharedDir)
     const tsv = readText(path)
     if (tsv === null) {
       return
@@ -518,8 +538,8 @@ export class KeyboardController {
       console.error('Google Pinyin import failed')
       return
     }
-    const skipped = Number.parseInt(readText(pendingSkippedPath(this.filesDir)) ?? '0')
-    removeFile(pendingSkippedPath(this.filesDir))
+    const skipped = Number.parseInt(readText(pendingSkippedPath(this.sharedDir)) ?? '0')
+    removeFile(pendingSkippedPath(this.sharedDir))
     const result: ImportResult = {
       added: counts[0],
       existing: counts[1],
@@ -527,7 +547,8 @@ export class KeyboardController {
       skipped: Number.isNaN(skipped) ? 0 : skipped,
       time: Date.now(),
     }
-    writeText(importResultPath(this.filesDir), JSON.stringify(result))
+    writeText(importResultPath(this.sharedDir), JSON.stringify(result))
+    this.writeUserWordsSnapshot(true)
   }
 
   private physicalKeyEventHandler(e: inputMethodEngine.KeyEvent): boolean {

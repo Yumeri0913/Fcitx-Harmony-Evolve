@@ -15,7 +15,8 @@ struct InputContextState {
     bool accepted;
 };
 
-void init(const std::string &bundle, const std::string &resfile, const std::string &files);
+// locale is like zh_CN, for translated names.
+void init(const std::string &bundle, const std::string &resfile, const std::string &files, const std::string &locale);
 void focusIn(bool clientPreedit);
 void focusOut();
 InputContextState reset();
@@ -28,11 +29,13 @@ void toggle();
 void setCurrentInputMethod(const std::string &inputMethod);
 void scroll(int start, int count);
 void save();
-// Apply conf/pinyin.conf written by the main app.
-void reloadPinyinConfig();
+// Merge pinyin options written by the main app at path into conf/pinyin.conf and apply them.
+void applyPinyinConfig(const std::string &path);
 // Google Pinyin user words, UTF-8 lines of "word\tpin'yin\tcount".
 // Merge into the running pinyin engine. Returns "added existing invalid".
 std::string importGooglePinyinWords(const std::string &tsv);
+// All pinyin user words with usage counts.
+std::string exportGooglePinyinWords();
 // Read user words from saved pinyin user data files, without a running engine.
 std::string readPinyinUserWords(const std::string &dictPath, const std::string &historyPath);
 } // namespace fcitx

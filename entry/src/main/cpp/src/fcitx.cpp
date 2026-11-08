@@ -2,6 +2,8 @@
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/standardpath.h>
+#include <fcitx-utils/standardpaths.h>
+#include <fstream>
 #include <fcitx-config/iniparser.h>
 #include <fcitx-config/rawconfig.h>
 #include <fcitx/action.h>
@@ -10,6 +12,7 @@
 #include <fcitx/instance.h>
 #include <fcitx/userinterfacemanager.h>
 #include <thread>
+#include <dlfcn.h>
 #include <sys/stat.h>
 #include <filesystem>
 #include "nativestreambuf.h"
@@ -21,10 +24,11 @@
 #include "googlepinyin_public.h"
 #include "googlepinyin_userdata.h"
 
+// Native library directory names in the bundle, as nativeLibraryPath "libs/arm64".
 #ifdef __x86_64__
 #define ARCH "x86_64"
 #elif defined(__aarch64__)
-#define ARCH "arm64-v8a"
+#define ARCH "arm64"
 #endif
 
 namespace fs = std::filesystem;
@@ -55,12 +59,27 @@ void setupLog() {
     fcitx::Log::setLogRule("*=5,notimedate");
 }
 
-void setupEnv(const std::string &bundle, const std::string &resfile, const std::string &files) {
+// Where shared addons like libpinyin.so are: next to this library. HarmonyOS names the
+// directory libs/arm64, not after the ABI arm64-v8a, so ask the loader instead of guessing.
+static std::string nativeLibraryDir(const ::fs::path &bundlePath) {
+    Dl_info info;
+    if (dladdr(reinterpret_cast<void *>(&nativeLibraryDir), &info) && info.dli_fname) {
+        ::fs::path library = info.dli_fname;
+        if (library.is_absolute()) {
+            return library.parent_path();
+        }
+    }
+    return bundlePath / "libs" / ARCH;
+}
+
+void setupEnv(const std::string &bundle, const std::string &resfile, const std::string &files,
+              const std::string &locale) {
     // resfile is /data/storage/el1/bundle/entry/resources/resfile
     ::fs::path bundlePath = bundle;
     ::fs::path resfilePath = resfile;
-    std::string fcitx_addon_dirs = bundlePath / "libs" / ARCH;
+    std::string fcitx_addon_dirs = nativeLibraryDir(bundlePath);
     setenv("FCITX_ADDON_DIRS", fcitx_addon_dirs.c_str(), 1);
+    FCITX_INFO() << "Addon dir: " << fcitx_addon_dirs;
     ::fs::path xdg_data_dirs = resfilePath / "usr" / "share";
     std::string fcitx_data_dirs = xdg_data_dirs / "fcitx5";
     std::string libime_model_dirs = resfilePath / "usr" / "lib" / "libime";
@@ -78,30 +97,25 @@ void setupEnv(const std::string &bundle, const std::string &resfile, const std::
     setenv("XDG_CONFIG_HOME", xdg_config_home.c_str(), 1);
     setenv("XDG_DATA_HOME", xdg_data_home.c_str(), 1);
     setenv("XDG_CACHE_HOME", xdg_cache_home.c_str(), 1);
+    // isAndroid() is true on HarmonyOS, so fcitx takes the UI language from here.
+    setenv("FCITX_LOCALE", locale.c_str(), 1);
 }
 
-// Google Pinyin defaults on first run: start in Chinese, keep the Chinese/English
-// state when switching apps, and predict the next word.
+// Google Pinyin starts in Chinese, like the fcitx5-android fork. Other defaults come
+// from fcitx's Android branch (isAndroid() is true on HarmonyOS).
 static void setDefaultConfig(const std::string &files) {
     ::fs::path configDir = ::fs::path(files) / "config" / "fcitx5";
     if (!::fs::exists(configDir / "config")) {
         RawConfig raw;
         raw.setValueByPath("Behavior/ActiveByDefault", "True");
-        raw.setValueByPath("Behavior/ShareInputState", "All");
         instance->globalConfig().load(raw, true);
         instance->globalConfig().safeSave();
     }
-    // Pinyin is loaded on demand, so its config can still be written here.
-    if (!::fs::exists(configDir / "conf" / "pinyin.conf")) {
-        RawConfig raw;
-        raw.setValueByPath("Prediction", "True");
-        safeSaveAsIni(raw, "conf/pinyin.conf");
-    }
 }
 
-void init(const std::string &bundle, const std::string &resfile, const std::string &files) {
+void init(const std::string &bundle, const std::string &resfile, const std::string &files, const std::string &locale) {
     setupLog();
-    setupEnv(bundle, resfile, files);
+    setupEnv(bundle, resfile, files, locale);
     // f5a and f5j need it. Not sure if f5h needs it but just do it.
     umask(007);
     StandardPath::global().syncUmask(); // Must happen after setupEnv.
@@ -262,8 +276,33 @@ void save() {
     with_fcitx([] { instance->save(); });
 }
 
-void reloadPinyinConfig() {
-    with_fcitx([] {
+static void mergeRawConfig(RawConfig &to, const RawConfig &from) {
+    for (const auto &name : from.subItems()) {
+        auto item = from.get(name);
+        if (!item) {
+            continue;
+        }
+        auto target = to.get(name, true);
+        if (item->subItemsSize() == 0) {
+            target->setValue(item->value());
+        } else {
+            mergeRawConfig(*target, *item);
+        }
+    }
+}
+
+void applyPinyinConfig(const std::string &path) {
+    with_fcitx([&path] {
+        std::ifstream in(path);
+        if (!in) {
+            return;
+        }
+        RawConfig changes;
+        readFromIni(changes, in);
+        RawConfig config;
+        readAsIni(config, "conf/pinyin.conf");
+        mergeRawConfig(config, changes);
+        safeSaveAsIni(config, "conf/pinyin.conf");
         // Only when loaded: otherwise it reads the config when loading.
         if (auto *pinyin = instance->addonManager().addon("pinyin")) {
             pinyin->reloadConfig();
@@ -279,6 +318,17 @@ std::string importGooglePinyinWords(const std::string &tsv) {
             return "";
         }
         return pinyin->call<IPinyinEngine::importGooglePinyinWords>(tsv);
+    });
+}
+
+std::string exportGooglePinyinWords() {
+    return with_fcitx([]() -> std::string {
+        if (auto *pinyin = instance->addonManager().addon("pinyin")) {
+            return pinyin->call<IPinyinEngine::exportGooglePinyinWords>();
+        }
+        // Not typed in pinyin since the keyboard started: read the saved files.
+        auto dir = StandardPaths::global().userDirectory(StandardPathsType::PkgData) / "pinyin";
+        return readPinyinUserWords(dir / "user.dict", dir / "user.history");
     });
 }
 

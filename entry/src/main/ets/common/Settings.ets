@@ -1,5 +1,7 @@
-// Keyboard settings and data files shared by the main app and the input method,
-// which run in different processes but share the module's files dir.
+// Keyboard settings and data files exchanged by the main app and the input method.
+// The input method extension runs in its own sandbox, so its files dir differs from the
+// app's. Both see the bundle's distributedFilesDir, which is passed as sharedDir here.
+// Fcitx's own user data stays in the input method's private files dir.
 import { fileIo as fs } from '@kit.CoreFileKit'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
@@ -30,35 +32,39 @@ export interface ImportResult {
   time: number
 }
 
-function settingsPath(filesDir: string): string {
-  return `${filesDir}/settings.json`
+function settingsPath(sharedDir: string): string {
+  return `${sharedDir}/settings.json`
 }
 
-function googlePinyinDir(filesDir: string): string {
-  return `${filesDir}/googlepinyin`
+function googlePinyinDir(sharedDir: string): string {
+  return `${sharedDir}/googlepinyin`
 }
 
 // Words waiting for the input method to merge them into the pinyin engine.
-export function pendingImportPath(filesDir: string): string {
-  return `${googlePinyinDir(filesDir)}/import.tsv`
+export function pendingImportPath(sharedDir: string): string {
+  return `${googlePinyinDir(sharedDir)}/import.tsv`
 }
 
 // Lines of the Google Pinyin file skipped by the main app, merged into the result.
-export function pendingSkippedPath(filesDir: string): string {
-  return `${googlePinyinDir(filesDir)}/import-skipped`
+export function pendingSkippedPath(sharedDir: string): string {
+  return `${googlePinyinDir(sharedDir)}/import-skipped`
 }
 
-export function importResultPath(filesDir: string): string {
-  return `${googlePinyinDir(filesDir)}/import-result.json`
+export function importResultPath(sharedDir: string): string {
+  return `${googlePinyinDir(sharedDir)}/import-result.json`
 }
 
-// Same as XDG_DATA_HOME set by the native side.
-export function pinyinUserDictPath(filesDir: string): string {
-  return `${filesDir}/data/fcitx5/pinyin/user.dict`
+// User words written by the input method when the keyboard hides, for export.
+export function userWordsSnapshotPath(sharedDir: string): string {
+  return `${googlePinyinDir(sharedDir)}/user-words.tsv`
 }
 
-export function pinyinHistoryPath(filesDir: string): string {
-  return `${filesDir}/data/fcitx5/pinyin/user.history`
+export function fileMtime(path: string): number {
+  try {
+    return fs.statSync(path).mtime
+  } catch (e) {
+    return 0
+  }
 }
 
 export function readText(path: string): string | null {
@@ -99,8 +105,8 @@ export function removeFile(path: string) {
   }
 }
 
-export function loadSettings(filesDir: string): KeyboardSettings {
-  const text = readText(settingsPath(filesDir))
+export function loadSettings(sharedDir: string): KeyboardSettings {
+  const text = readText(settingsPath(sharedDir))
   const settings: KeyboardSettings = {
     theme: DEFAULT_SETTINGS.theme,
     keyBorder: DEFAULT_SETTINGS.keyBorder,
@@ -131,6 +137,6 @@ export function loadSettings(filesDir: string): KeyboardSettings {
   return settings
 }
 
-export function saveSettings(filesDir: string, settings: KeyboardSettings) {
-  writeText(settingsPath(filesDir), JSON.stringify(settings))
+export function saveSettings(sharedDir: string, settings: KeyboardSettings) {
+  writeText(settingsPath(sharedDir), JSON.stringify(settings))
 }

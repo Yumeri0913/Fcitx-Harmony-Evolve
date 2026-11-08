@@ -1,12 +1,11 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs, picker } from '@kit.CoreFileKit';
-import fcitx from 'libentry.so';
 import {
   decode, DEFAULT_FILE_NAME, fromTsv, parse, toGooglePinyinBytes, toTsv
 } from '../common/GooglePinyinUserDict';
 import {
   ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath,
-  pinyinHistoryPath, pinyinUserDictPath, readText, saveSettings, ThemeMode, VibrationStrength, writeText
+  fileMtime, readText, saveSettings, ThemeMode, userWordsSnapshotPath, VibrationStrength, writeText
 } from '../common/Settings';
 import { BoolOption, FUZZY_OPTIONS, GENERAL_OPTIONS, GOOGLE_PINYIN_FUZZY, PinyinConfig } from '../common/PinyinConfig';
 
@@ -47,7 +46,8 @@ function writeBytes(uri: string, bytes: Uint8Array) {
 @Component
 struct Index {
   private context = this.getUIContext().getHostContext() as common.UIAbilityContext
-  private filesDir: string = this.context.filesDir
+  // Shared with the input method, see Settings.ets.
+  private filesDir: string = this.context.distributedFilesDir
   @State settings: KeyboardSettings = loadSettings(this.filesDir)
   @State dictStatus: string = ''
   @State generalValues: boolean[] = []
@@ -129,20 +129,26 @@ struct Index {
 
   private async exportGooglePinyin() {
     try {
-      // The input method saves user data whenever the keyboard is hidden.
-      const tsv = fcitx.readPinyinUserWords(pinyinUserDictPath(this.filesDir), pinyinHistoryPath(this.filesDir))
+      // The input method leaves its user words here when the keyboard hides.
+      const snapshot = userWordsSnapshotPath(this.filesDir)
+      const tsv = readText(snapshot)
+      if (tsv === null) {
+        this.dictStatus = '还没有可导出的词。请先用 Fcitx5 打一次字并收起键盘，再回来导出。'
+        return
+      }
       const entries = fromTsv(tsv)
       if (entries.length === 0) {
         this.dictStatus = '拼音用户词库是空的。'
         return
       }
+      const time = new Date(fileMtime(snapshot) * 1000).toLocaleString()
       const documentPicker = new picker.DocumentViewPicker(this.context)
       const uris = await documentPicker.save({ newFileNames: [DEFAULT_FILE_NAME] })
       if (uris.length === 0) {
         return
       }
       writeBytes(uris[0], toGooglePinyinBytes(entries))
-      this.dictStatus = `已导出 ${entries.length} 个词，可在谷歌拼音的“导入用户字典”中使用。`
+      this.dictStatus = `已导出 ${entries.length} 个词（截至 ${time} 收起键盘时），可在谷歌拼音的“导入用户字典”中使用。`
     } catch (e) {
       this.dictStatus = `导出失败：${e}`
     }

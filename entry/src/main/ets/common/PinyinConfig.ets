@@ -1,27 +1,17 @@
-// Pinyin engine options in fcitx's conf/pinyin.conf, edited by the main app and
-// reloaded by the input method when the keyboard shows.
-import { fileIo as fs } from '@kit.CoreFileKit'
+// Pinyin engine options edited by the main app, in fcitx's ini format. The input
+// method merges them into its own conf/pinyin.conf when the keyboard shows.
 import { readText, writeText } from './Settings'
 
-// Same as XDG_CONFIG_HOME set by the native side.
-export function pinyinConfigPath(filesDir: string): string {
-  return `${filesDir}/config/fcitx5/conf/pinyin.conf`
-}
-
-// Modification time, to tell whether the main app changed the file.
-export function pinyinConfigMtime(filesDir: string): number {
-  try {
-    return fs.statSync(pinyinConfigPath(filesDir)).mtime
-  } catch (e) {
-    return 0
-  }
+// In the shared dir, see Settings.ets.
+export function pinyinConfigPath(sharedDir: string): string {
+  return `${sharedDir}/pinyin.conf`
 }
 
 export interface BoolOption {
   // Path in the ini file, e.g. "Prediction" or "Fuzzy/Z_ZH".
   path: string
   label: string
-  // fcitx default when the file doesn't set it.
+  // fcitx default on Android, which HarmonyOS follows, when the file doesn't set it.
   defaultValue: boolean
 }
 
@@ -30,7 +20,7 @@ export const GENERAL_OPTIONS: BoolOption[] = [
   { path: 'SpellEnabled', label: '英文候选（中英混输）', defaultValue: true },
   { path: 'CloudPinyinEnabled', label: '云拼音', defaultValue: false },
   { path: 'ChaiziEnabled', label: '拆字（u 模式）', defaultValue: true },
-  { path: 'ExtBEnabled', label: '生僻字（扩展 B 区及以后）', defaultValue: true },
+  { path: 'ExtBEnabled', label: '生僻字（扩展 B 区及以后）', defaultValue: false },
 ]
 
 // Google Pinyin's fuzzy pinyin pairs come first.
@@ -69,10 +59,10 @@ class Section {
 export class PinyinConfig {
   private sections: Section[] = []
 
-  static load(filesDir: string): PinyinConfig {
+  static load(sharedDir: string): PinyinConfig {
     const config = new PinyinConfig()
     config.sections.push(new Section(''))
-    const text = readText(pinyinConfigPath(filesDir)) ?? ''
+    const text = readText(pinyinConfigPath(sharedDir)) ?? ''
     for (const raw of text.split('\n')) {
       const line = raw.replace(/\r$/, '')
       const header = /^\s*\[(.*)\]\s*$/.exec(line)
@@ -133,7 +123,6 @@ export class PinyinConfig {
   }
 
   // Write options the file doesn't set yet, so it matches what the app shows.
-  // Prediction differs from the fcitx default.
   fillDefaults(options: BoolOption[]) {
     for (const option of options) {
       const parts = this.split(option.path)
@@ -144,7 +133,7 @@ export class PinyinConfig {
     }
   }
 
-  save(filesDir: string) {
+  save(sharedDir: string) {
     const out: string[] = []
     for (const section of this.sections) {
       if (section.name !== '') {
@@ -159,6 +148,6 @@ export class PinyinConfig {
     if (!text.endsWith('\n')) {
       text += '\n'
     }
-    writeText(pinyinConfigPath(filesDir), text)
+    writeText(pinyinConfigPath(sharedDir), text)
   }
 }

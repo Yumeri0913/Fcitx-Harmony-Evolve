@@ -1117,7 +1117,7 @@ index 4b77d0f..40471fb 100644
    }
    return toolbar
 diff --git a/src/ux.ts b/src/ux.ts
-index 892f0e9..6de0f6b 100644
+index 892f0e9..2186c31 100644
 --- a/src/ux.ts
 +++ b/src/ux.ts
 @@ -6,7 +6,6 @@ import CheckMark from 'bundle-text:../svg/checkmark.svg'
@@ -1239,11 +1239,25 @@ index 892f0e9..6de0f6b 100644
      longPress,
      index: longPress?.index ?? 0,
      startX: touch.clientX,
-@@ -439,7 +442,6 @@ export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
+@@ -438,11 +441,19 @@ export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
+   }
  }
  
++// Like fcitx5-android's space key: a short language name rather than the layout's name,
++// e.g. "Keyboard - English (US)".
++function spaceLabel(inputMethod: InputMethod) {
++  if (inputMethod.name.startsWith('keyboard-')) {
++    return navigator.language.startsWith('zh') ? '英语' : 'English'
++  }
++  return inputMethod.displayName
++}
++
  export function setInputMethods(inputMethods: InputMethod[], currentInputMethod: string) {
 -  inputMethods_ = inputMethods
    for (const inputMethod of inputMethods) {
      if (inputMethod.name === currentInputMethod) {
-       setSpaceKeyLabel(null, inputMethod.displayName)
+-      setSpaceKeyLabel(null, inputMethod.displayName)
++      setSpaceKeyLabel(null, spaceLabel(inputMethod))
+       break
+     }
+   }

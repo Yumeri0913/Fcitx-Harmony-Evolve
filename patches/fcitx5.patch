@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index ee908c87..4d0449f4 100644
+index 9c1f02f7..073744b9 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -231,7 +231,6 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.h.in ${CMAKE_CURRENT_BINARY_DI
@@ -150,6 +150,22 @@ index d1f3638f..112c3b6b 100644
          .self()
  
  #define FCITX_LOG(LEVEL) FCITX_LOGC(::fcitx::Log::defaultCategory, LEVEL)
+diff --git a/src/lib/fcitx-utils/misc.h b/src/lib/fcitx-utils/misc.h
+index 2ad6d558..47a2ef89 100644
+--- a/src/lib/fcitx-utils/misc.h
++++ b/src/lib/fcitx-utils/misc.h
+@@ -152,8 +152,10 @@ FCITXUTILS_EXPORT bool isInFlatpak();
+  *
+  * @since 5.1.2
+  */
++// HarmonyOS is a touch-first mobile system like Android, and fcitx5-harmony follows
++// fcitx5-android's defaults (preedit in the keyboard, prediction, shared state...).
+ constexpr bool isAndroid() {
+-#if defined(ANDROID) || defined(__ANDROID__)
++#if defined(ANDROID) || defined(__ANDROID__) || defined(__OHOS__)
+     return true;
+ #else
+     return false;
 diff --git a/src/lib/fcitx-utils/standardpaths_p_unix.cpp b/src/lib/fcitx-utils/standardpaths_p_unix.cpp
 index 7bee8aba..8d593e05 100644
 --- a/src/lib/fcitx-utils/standardpaths_p_unix.cpp

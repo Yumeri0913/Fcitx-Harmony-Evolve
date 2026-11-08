@@ -4,11 +4,12 @@
 #include "napihelper.h"
 
 API(init) {
-    GET_ARGS(3)
+    GET_ARGS(4)
     GET_STRING(bundle, 0)
     GET_STRING(resfile, 1)
     GET_STRING(files, 2)
-    fcitx::init(bundle, resfile, files);
+    GET_STRING(locale, 3)
+    fcitx::init(bundle, resfile, files, locale);
     return {};
 }
 
@@ -102,8 +103,10 @@ API(save) {
     return {};
 }
 
-API(reloadPinyinConfig) {
-    fcitx::reloadPinyinConfig();
+API(applyPinyinConfig) {
+    GET_ARGS(1)
+    GET_STRING(path, 0)
+    fcitx::applyPinyinConfig(path);
     return {};
 }
 
@@ -114,11 +117,8 @@ API(importGooglePinyinWords) {
     return ret;
 }
 
-API(readPinyinUserWords) {
-    GET_ARGS(2)
-    GET_STRING(dictPath, 0)
-    GET_STRING(historyPath, 1)
-    STRING(ret, fcitx::readPinyinUserWords(dictPath, historyPath))
+API(exportGooglePinyinWords) {
+    STRING(ret, fcitx::exportGooglePinyinWords())
     return ret;
 }
 
@@ -160,9 +160,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"activateCandidateAction", nullptr, activateCandidateAction, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"scroll", nullptr, scroll, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"save", nullptr, save, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"reloadPinyinConfig", nullptr, reloadPinyinConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"applyPinyinConfig", nullptr, applyPinyinConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"importGooglePinyinWords", nullptr, importGooglePinyinWords, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"readPinyinUserWords", nullptr, readPinyinUserWords, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"exportGooglePinyinWords", nullptr, exportGooglePinyinWords, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setCurrentInputMethod", nullptr, setCurrentInputMethod, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"activateStatusAreaAction", nullptr, activateStatusAreaAction, nullptr, nullptr, nullptr, napi_default,
          nullptr}};
