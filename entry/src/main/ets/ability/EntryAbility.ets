@@ -6,6 +6,20 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onCreate');
+    this.openPage(want)
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    this.openPage(want)
+  }
+
+  // Opened from the keyboard's theme button or status area, see Index.ets.
+  private openPage(want: Want) {
+    const page = want.parameters?.page as string | undefined
+    if (page !== undefined) {
+      AppStorage.setOrCreate('openInputMethod', (want.parameters?.inputMethod as string | undefined) ?? '')
+      AppStorage.setOrCreate('openPage', page)
+    }
   }
 
   onDestroy(): void {

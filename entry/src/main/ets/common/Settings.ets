@@ -23,7 +23,9 @@ export interface KeyboardSettings {
   heightPercentLandscape: number
   // vp, fcitx5-android's key margins and radius.
   keyMarginX: number
+  // Google Pinyin leaves twice this below each key: 10 vp portrait, 4 vp landscape.
   keyMarginY: number
+  keyMarginYLandscape: number
   keyRadius: number
   popupOnKeyPress: boolean
   keySound: boolean
@@ -32,7 +34,20 @@ export interface KeyboardSettings {
   // LAN clipboard sync of fcitx5-android (InsightKey fork). Off by default: it serves the
   // clipboard history to the local network.
   clipboardSync: boolean
+  // Google Pinyin's 输入法 and 键盘 settings, see QuickSettingsPage.
+  doubleSpacePeriod: boolean
+  spaceSwipeMoveCursor: boolean
+  // 90 to 110, percent of Google Pinyin's height.
+  heightRatio: number
+  // Swipe distance multiplier: 3, 1.5, 1, 0.8 or 0.5.
+  slideSensitivity: number
+  // ms, 100 to 700.
+  longPressDelay: number
+  // Bumped when defaults change, to migrate saved settings that kept old defaults.
+  version?: number
 }
+
+const SETTINGS_VERSION = 2
 
 export const DEFAULT_SETTINGS: KeyboardSettings = {
   theme: 'system',
@@ -43,12 +58,18 @@ export const DEFAULT_SETTINGS: KeyboardSettings = {
   heightPercentPortrait: 27,
   heightPercentLandscape: 49,
   keyMarginX: 3,
-  keyMarginY: 7,
+  keyMarginY: 5,
+  keyMarginYLandscape: 2,
   keyRadius: 2,
   popupOnKeyPress: true,
   keySound: false,
   keySoundVolume: 50,
   clipboardSync: false,
+  doubleSpacePeriod: true,
+  spaceSwipeMoveCursor: true,
+  heightRatio: 100,
+  slideSensitivity: 1,
+  longPressDelay: 300,
 }
 
 export interface ImportResult {
@@ -181,11 +202,17 @@ export function loadSettings(sharedDir: string): KeyboardSettings {
     heightPercentLandscape: d.heightPercentLandscape,
     keyMarginX: d.keyMarginX,
     keyMarginY: d.keyMarginY,
+    keyMarginYLandscape: d.keyMarginYLandscape,
     keyRadius: d.keyRadius,
     popupOnKeyPress: d.popupOnKeyPress,
     keySound: d.keySound,
     keySoundVolume: d.keySoundVolume,
     clipboardSync: d.clipboardSync,
+    doubleSpacePeriod: d.doubleSpacePeriod,
+    spaceSwipeMoveCursor: d.spaceSwipeMoveCursor,
+    heightRatio: d.heightRatio,
+    slideSensitivity: d.slideSensitivity,
+    longPressDelay: d.longPressDelay,
   }
   if (text === null) {
     return settings
@@ -212,6 +239,11 @@ export function loadSettings(sharedDir: string): KeyboardSettings {
     settings.heightPercentLandscape = numberIn(saved.heightPercentLandscape, 10, 90, d.heightPercentLandscape)
     settings.keyMarginX = numberIn(saved.keyMarginX, 0, 24, d.keyMarginX)
     settings.keyMarginY = numberIn(saved.keyMarginY, 0, 24, d.keyMarginY)
+    // 7 was the default before keys were drawn at the top of their cell like Google Pinyin.
+    if ((saved.version ?? 1) < 2 && settings.keyMarginY === 7) {
+      settings.keyMarginY = d.keyMarginY
+    }
+    settings.keyMarginYLandscape = numberIn(saved.keyMarginYLandscape, 0, 24, d.keyMarginYLandscape)
     settings.keyRadius = numberIn(saved.keyRadius, 0, 48, d.keyRadius)
     settings.keySoundVolume = numberIn(saved.keySoundVolume, 0, 100, d.keySoundVolume)
     if (typeof saved.popupOnKeyPress === 'boolean') {
@@ -223,6 +255,15 @@ export function loadSettings(sharedDir: string): KeyboardSettings {
     if (typeof saved.clipboardSync === 'boolean') {
       settings.clipboardSync = saved.clipboardSync
     }
+    if (typeof saved.doubleSpacePeriod === 'boolean') {
+      settings.doubleSpacePeriod = saved.doubleSpacePeriod
+    }
+    if (typeof saved.spaceSwipeMoveCursor === 'boolean') {
+      settings.spaceSwipeMoveCursor = saved.spaceSwipeMoveCursor
+    }
+    settings.heightRatio = numberIn(saved.heightRatio, 90, 110, d.heightRatio)
+    settings.slideSensitivity = numberIn(saved.slideSensitivity, 0.5, 3, d.slideSensitivity)
+    settings.longPressDelay = numberIn(saved.longPressDelay, 100, 700, d.longPressDelay)
   } catch (e) {
     console.error(`Invalid settings: ${e}`)
   }
@@ -230,5 +271,6 @@ export function loadSettings(sharedDir: string): KeyboardSettings {
 }
 
 export function saveSettings(sharedDir: string, settings: KeyboardSettings) {
+  settings.version = SETTINGS_VERSION
   writeText(settingsPath(sharedDir), JSON.stringify(settings))
 }

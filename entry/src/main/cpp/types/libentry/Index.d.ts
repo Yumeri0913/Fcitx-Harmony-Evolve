@@ -22,7 +22,7 @@ export const setCurrentInputMethod: (inputMethod: string) => void
 export const scroll: (start: number, count: number) => void
 // Saving writes configs from memory, so it first reloads config changed by the settings page.
 export const save: (shared: string) => void
-export const reloadConfigIfChanged: (shared: string) => void
+export const reloadConfigIfChanged: (shared: string, force?: boolean) => void
 // Quick phrase and unicode input, from the comma key menu.
 export const triggerQuickPhrase: () => void
 export const triggerUnicode: () => void

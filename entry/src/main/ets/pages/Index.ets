@@ -1,13 +1,4 @@
 import { common } from '@kit.AbilityKit';
-import { picker } from '@kit.CoreFileKit';
-import { readBytes, writeBytes } from '../common/Files';
-import {
-  decode, DEFAULT_FILE_NAME, fromTsv, parse, toGooglePinyinBytes, toTsv
-} from '../common/GooglePinyinUserDict';
-import {
-  ImportResult, importResultPath, pendingImportPath, pendingSkippedPath, fileMtime, readText,
-  userWordsSnapshotPath, writeText
-} from '../common/Settings';
 import { fcitxLocale } from '../common/Locale';
 import fcitx from 'libentry.so';
 import { AddonsPage } from './settings/AddonsPage';
@@ -17,6 +8,8 @@ import { BackupPage } from './settings/BackupPage';
 import { ClipboardSyncPage } from './settings/ClipboardSyncPage';
 import { KeyboardPage } from './settings/KeyboardPage';
 import { PinyinDictPage } from './settings/PinyinDictPage';
+import { QuickSettingsPage } from './settings/QuickSettingsPage';
+import { UserDictPage } from './settings/UserDictPage';
 import { QuickPhrasePage } from './settings/QuickPhrasePage';
 import { TextFilePage, TextFilePageParam, textFileParam } from './settings/TextFilePage';
 
@@ -27,16 +20,31 @@ struct Index {
   // Shared with the input method, see Settings.ets.
   private filesDir: string = this.context.distributedFilesDir
   @Provide('settingsStack') stack: NavPathStack = new NavPathStack()
-  @State dictStatus: string = ''
+  // A page asked for by the keyboard, see EntryAbility.
+  @StorageLink('openPage') @Watch('onOpenPage') openPage: string = ''
+  @StorageLink('openInputMethod') openInputMethod: string = ''
 
   aboutToAppear() {
     // A fcitx of its own for config descriptions; config files are shared with the keyboard.
     fcitx.initSettings(this.context.bundleCodeDir, this.context.resourceDir, this.context.filesDir,
       this.context.distributedFilesDir, fcitxLocale())
+    this.onOpenPage()
   }
 
-  onPageShow() {
-    this.updateDictStatus()
+  onOpenPage() {
+    const page = this.openPage
+    if (page === '-') {
+      return
+    }
+    // '' is the main page.
+    this.stack.clear(false)
+    if (page === 'keyboard') {
+      this.stack.pushPathByName('keyboard', null, false)
+    } else if (page === 'inputMethod' && this.openInputMethod) {
+      const title = this.openInputMethod === 'pinyin' ? '拼音' : this.openInputMethod
+      this.stack.pushPathByName('config', { uri: `im/${this.openInputMethod}`, title: title } as ConfigPageParam, false)
+    }
+    this.openPage = '-'
   }
 
   private open(name: string, param?: ConfigPageParam) {
@@ -67,6 +75,10 @@ struct Index {
       BackupPage()
     } else if (name === 'clipboardSync') {
       ClipboardSyncPage()
+    } else if (name === 'userDict') {
+      UserDictPage()
+    } else if (name === 'quickSettings') {
+      QuickSettingsPage()
     }
   }
 
@@ -86,69 +98,6 @@ struct Index {
     .width('100%')
     .padding({ left: 16, right: 16, top: 12, bottom: 12 })
     .onClick(onClick)
-  }
-
-  private updateDictStatus() {
-    if (readText(pendingImportPath(this.filesDir)) !== null) {
-      this.dictStatus = '等待导入：下次弹出键盘时合并进拼音用户词库。'
-      return
-    }
-    const text = readText(importResultPath(this.filesDir))
-    if (text !== null) {
-      const result = JSON.parse(text) as ImportResult
-      const time = new Date(result.time).toLocaleString()
-      this.dictStatus = `上次导入（${time}）：新增 ${result.added} 个词，已有 ${result.existing} 个，` +
-        `跳过 ${result.skipped + result.invalid} 行（英文词或无效拼音）。`
-    }
-  }
-
-  private async importGooglePinyin() {
-    try {
-      const documentPicker = new picker.DocumentViewPicker(this.context)
-      const uris = await documentPicker.select({ maxSelectNumber: 1, fileSuffixFilters: ['.txt'] })
-      if (uris.length === 0) {
-        return
-      }
-      const result = parse(decode(readBytes(uris[0])))
-      if (result.entries.length === 0) {
-        this.dictStatus = `没有可导入的词，跳过 ${result.skipped} 行。请选择谷歌拼音导出的 ${DEFAULT_FILE_NAME}。`
-        return
-      }
-      // The pinyin engine runs in the input method process, which merges the words.
-      writeText(pendingImportPath(this.filesDir), toTsv(result.entries))
-      writeText(pendingSkippedPath(this.filesDir), `${result.skipped}`)
-      this.dictStatus = `已读取 ${result.entries.length} 个词，跳过 ${result.skipped} 行。` +
-        '下次弹出键盘时合并进拼音用户词库。'
-    } catch (e) {
-      this.dictStatus = `导入失败：${e}`
-    }
-  }
-
-  private async exportGooglePinyin() {
-    try {
-      // The input method leaves its user words here when the keyboard hides.
-      const snapshot = userWordsSnapshotPath(this.filesDir)
-      const tsv = readText(snapshot)
-      if (tsv === null) {
-        this.dictStatus = '还没有可导出的词。请先用 Fcitx5 打一次字并收起键盘，再回来导出。'
-        return
-      }
-      const entries = fromTsv(tsv)
-      if (entries.length === 0) {
-        this.dictStatus = '拼音用户词库是空的。'
-        return
-      }
-      const time = new Date(fileMtime(snapshot) * 1000).toLocaleString()
-      const documentPicker = new picker.DocumentViewPicker(this.context)
-      const uris = await documentPicker.save({ newFileNames: [DEFAULT_FILE_NAME] })
-      if (uris.length === 0) {
-        return
-      }
-      writeBytes(uris[0], toGooglePinyinBytes(entries))
-      this.dictStatus = `已导出 ${entries.length} 个词（截至 ${time} 收起键盘时），可在谷歌拼音的“导入用户字典”中使用。`
-    } catch (e) {
-      this.dictStatus = `导出失败：${e}`
-    }
   }
 
   @Builder
@@ -175,6 +124,9 @@ struct Index {
           .width('100%')
           .padding({ left: 16, right: 16, top: 8 })
 
+        this.sectionTitle('快捷设置')
+        this.linkRow('谷歌拼音风格设置', '按谷歌拼音 4.x 设置的顺序和措辞', (): void => this.open('quickSettings'))
+
         this.sectionTitle('输入')
         this.linkRow('输入法', '启用、排序和设置输入法', (): void => this.open('inputMethods'))
         this.linkRow('拼音', '联想、模糊音、英文候选等', (): void => this.open('config', { uri: 'im/pinyin', title: '拼音' }))
@@ -182,6 +134,7 @@ struct Index {
         this.linkRow('附加组件', '标点、快速输入、云拼音等', (): void => this.open('addons'))
 
         this.sectionTitle('词库')
+        this.linkRow('谷歌拼音用户词库', '导入或导出谷歌拼音的用户字典', (): void => this.open('userDict'))
         this.linkRow('拼音词库', '导入搜狗、libime 词库，清除学到的词', (): void => this.open('pinyinDict'))
         this.linkRow('自定义短语', '用缩写输入固定内容', (): void => this.openTextFile('customPhrase'))
         this.linkRow('快速输入', '长按逗号键使用的短语列表', (): void => this.open('quickPhrase'))
@@ -192,29 +145,6 @@ struct Index {
         this.linkRow('剪贴板同步', '与局域网内的电脑同步剪贴板', (): void => this.open('clipboardSync'))
         this.linkRow('备份与恢复', '导出设置和词库，或恢复安卓版的备份', (): void => this.open('backup'))
 
-        this.sectionTitle('谷歌拼音用户词库')
-        Text('在谷歌拼音中导出用户字典（user-dictionary.txt），再在这里导入。' +
-          '导入的词与 Fcitx5 学到的词放在一起，会随日常输入继续调整顺序。')
-          .fontSize(14)
-          .fontColor($r('sys.color.font_secondary'))
-          .width('100%')
-          .padding({ left: 16, right: 16 })
-        Row({ space: 12 }) {
-          Button('导入').layoutWeight(1).onClick(() => {
-            this.importGooglePinyin()
-          })
-          Button('导出').layoutWeight(1).onClick(() => {
-            this.exportGooglePinyin()
-          })
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 12 })
-        if (this.dictStatus) {
-          Text(this.dictStatus)
-            .fontSize(14)
-            .width('100%')
-            .padding({ left: 16, right: 16, top: 12 })
-        }
       }
       .width('100%')
       .padding({ bottom: 32 })

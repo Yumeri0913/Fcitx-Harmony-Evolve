@@ -34,7 +34,7 @@ void toggle();
 void setCurrentInputMethod(const std::string &inputMethod);
 void scroll(int start, int count);
 // Reload config if the settings page changed it. Returns whether it did.
-bool reloadConfigIfChanged(const std::string &shared);
+bool reloadConfigIfChanged(const std::string &shared, bool force = false);
 void save(const std::string &shared);
 // Apply dictionaries, custom phrases, quick phrases and punctuation edited by the settings page.
 bool syncDataIfChanged(const std::string &shared);

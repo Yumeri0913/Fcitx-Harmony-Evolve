@@ -102,10 +102,15 @@ export struct KeyboardPage {
               this.settings.keyMarginX = v
               this.save()
             })
-            this.sliderRow('按键垂直间距', this.settings.keyMarginY, 0, 16, ' vp', true, (v: number) => {
+            this.sliderRow('按键垂直间距（竖屏）', this.settings.keyMarginY, 0, 16, ' vp', true, (v: number) => {
               this.settings.keyMarginY = v
               this.save()
             })
+            this.sliderRow('按键垂直间距（横屏）', this.settings.keyMarginYLandscape, 0, 16, ' vp', true,
+              (v: number) => {
+                this.settings.keyMarginYLandscape = v
+                this.save()
+              })
           }
         }
         ListItem() {

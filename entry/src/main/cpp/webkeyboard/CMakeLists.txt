@@ -7,6 +7,7 @@ add_library(webkeyboard STATIC
 target_link_libraries(webkeyboard Fcitx5::Core nlohmann_json::nlohmann_json)
 target_include_directories(webkeyboard PRIVATE
     "${PROJECT_SOURCE_DIR}/pugixml/src"
+    "${PROJECT_SOURCE_DIR}/fcitx5-chinese-addons/modules/punctuation"
 )
 
 configure_file(webkeyboard.conf.in.in webkeyboard.conf.in @ONLY)

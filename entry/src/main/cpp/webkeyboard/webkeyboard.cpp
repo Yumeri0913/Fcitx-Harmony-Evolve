@@ -1,7 +1,11 @@
 #include <fcitx/action.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx/menu.h>
+#include <fcitx/inputmethodentry.h>
+#include <fcitx/inputmethodmanager.h>
 #include <fcitx/statusarea.h>
+#include <fcitx-utils/utf8.h>
+#include "punctuation_public.h"
 
 #include "../src/fcitx.h"
 #include "webkeyboard.h"
@@ -141,6 +145,33 @@ void WebKeyboard::updateStatusArea(InputContext *ic) {
         actions.emplace_back(actionToJson(action, ic));
     }
     notify_main_async(json{{"type", "STATUS_AREA"}, {"data", actions}}.dump());
+    updatePunctuation(ic);
+}
+
+// What the keyboard shows on punctuation keys, like fcitx5-android's PunctuationComponent:
+// the first mapping of each ASCII punctuation while full width punctuation is on.
+void WebKeyboard::updatePunctuation(InputContext *ic) {
+    nlohmann::json mapping = nlohmann::json::object();
+    bool enabled = false;
+    for (auto *action : ic->statusArea().allActions()) {
+        if (action->name() == "punctuation" && action->icon(ic) == "fcitx-punc-active") {
+            enabled = true;
+        }
+    }
+    auto *punctuation = instance_->addonManager().addon("punctuation");
+    const auto *entry = instance_->inputMethodEntry(ic);
+    if (enabled && punctuation && entry) {
+        for (uint32_t c = 0x21; c < 0x7f; ++c) {
+            if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+                continue;
+            }
+            const auto &result = punctuation->call<IPunctuation::getPunctuation>(entry->languageCode(), c);
+            if (!result.first.empty()) {
+                mapping[utf8::UCS4ToUTF8(c)] = result.first;
+            }
+        }
+    }
+    notify_main_async(json{{"type", "PUNCTUATION"}, {"data", mapping}}.dump());
 }
 } // namespace fcitx
 

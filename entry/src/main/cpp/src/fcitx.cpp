@@ -430,9 +430,9 @@ void runPinyinAction(const std::string &action) {
     });
 }
 
-bool reloadConfigIfChanged(const std::string &shared) {
+bool reloadConfigIfChanged(const std::string &shared, bool force) {
     auto signature = configSignature(shared);
-    if (signature == configSignature_) {
+    if (!force && signature == configSignature_) {
         return false;
     }
     with_fcitx([] {

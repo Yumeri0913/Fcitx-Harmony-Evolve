@@ -42,6 +42,7 @@ public:
     void showVirtualKeyboard() override;
     void hideVirtualKeyboard() override {}
     void updateStatusArea(InputContext *ic);
+    void updatePunctuation(InputContext *ic);
     void scroll(int start, int count);
 
 private:

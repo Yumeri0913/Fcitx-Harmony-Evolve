@@ -150,9 +150,14 @@ API(triggerUnicode) {
 }
 
 API(reloadConfigIfChanged) {
-    GET_ARGS(1)
+    GET_ARGS(2)
     GET_STRING(shared, 0)
-    fcitx::reloadConfigIfChanged(shared);
+    // Optional: reload even if unchanged, for the status area's reload config.
+    bool force = false;
+    if (argc > 1) {
+        napi_get_value_bool(env, args[1], &force);
+    }
+    fcitx::reloadConfigIfChanged(shared, force);
     return {};
 }
 

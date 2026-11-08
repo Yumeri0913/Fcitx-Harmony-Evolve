@@ -90,6 +90,8 @@ export class KeyboardController {
   private pendingEvents: SystemEvent[] = []
   // Shared with the main app, see Settings.ets.
   private sharedDir = ''
+  // For the status area's input method options.
+  private currentInputMethod = ''
   private settings: KeyboardSettings | null = null
   private hapticPresetSupported = true
   private lastSnapshotTime = 0
@@ -166,6 +168,10 @@ export class KeyboardController {
         break
       case 'PREEDIT':
         this.hasPreeditOrAux = event.data.auxUp !== '' || event.data.preedit !== ''
+        this.sendEvent(event)
+        break
+      case 'INPUT_METHODS':
+        this.currentInputMethod = event.data.currentInputMethod
         this.sendEvent(event)
         break
       default:
@@ -347,7 +353,34 @@ export class KeyboardController {
     }
   }
 
+  // Google Pinyin: two quick spaces after a letter, digit or Chinese character become a period,
+  // "。" in Chinese input methods and ". " otherwise, like fcitx5-android (InsightKey fork).
+  private lastSpaceTime = 0
+
+  private maybeDoubleSpacePeriod(): boolean {
+    const now = Date.now()
+    const previous = this.lastSpaceTime
+    this.lastSpaceTime = now
+    if (!this.settings?.doubleSpacePeriod || this.hasPreeditOrAux || now - previous > 300) {
+      return false
+    }
+    const before = this.textInputClient?.getForwardSync(2) ?? ''
+    if (before.length !== 2 || before[1] !== ' ' || !/[\p{L}\p{N}]/u.test(before[0])) {
+      return false
+    }
+    this.lastSpaceTime = 0
+    this.textInputClient?.deleteForwardSync(1)
+    this.insertText(this.currentInputMethod.startsWith('keyboard-') ? '. ' : '。')
+    return true
+  }
+
   public handleKey(key: string, keyCode?: number): void {
+    if (key === ' ' && this.maybeDoubleSpacePeriod()) {
+      return
+    }
+    if (key !== ' ') {
+      this.lastSpaceTime = 0
+    }
     const res = fcitx.processKey(key ? key.charCodeAt(0) : 0, keyCode ?? 0, false)
     if (!this.processResult(res)) {
       switch (keyCode) { // Check code first as enter has to be handled differently, which has key \r.
@@ -410,6 +443,12 @@ export class KeyboardController {
       case 'CLIPBOARD_CLEAR':
         this.clipboard.clear()
         return this.sendClipboard()
+      case 'RELOAD_CONFIG':
+        fcitx.reloadConfigIfChanged(this.sharedDir, true)
+        fcitx.syncDataIfChanged(this.sharedDir)
+        return
+      case 'OPEN_SETTINGS':
+        return this.openSettings(event.data)
       case 'QUICKPHRASE':
         return fcitx.triggerQuickPhrase()
       case 'UNICODE':
@@ -446,6 +485,15 @@ export class KeyboardController {
       case 'UNDO':
         return undo(this.textInputClient!)
     }
+  }
+
+  // The settings app, on a page for the status area and the toolbar's theme button.
+  private openSettings(page: string) {
+    this.ctx?.startAbility({
+      bundleName: this.ctx.applicationInfo.name,
+      abilityName: 'EntryAbility',
+      parameters: { page: page, inputMethod: this.currentInputMethod },
+    }).catch((e: Error) => console.error(`Failed to open settings: ${e.message}`))
   }
 
   public insertText(text: string): void {
@@ -536,9 +584,12 @@ export class KeyboardController {
         theme: settings.theme,
         keyBorder: settings.keyBorder,
         keyMarginX: settings.keyMarginX,
-        keyMarginY: settings.keyMarginY,
+        keyMarginY: this.isLandscape() ? settings.keyMarginYLandscape : settings.keyMarginY,
         keyRadius: settings.keyRadius,
         popupOnKeyPress: settings.popupOnKeyPress,
+        spaceSwipeMoveCursor: settings.spaceSwipeMoveCursor,
+        slideSensitivity: settings.slideSensitivity,
+        longPressDelay: settings.longPressDelay,
       }
     })
   }
@@ -560,6 +611,11 @@ export class KeyboardController {
     }
   }
 
+  private isLandscape(): boolean {
+    const defaultDisplay = display.getDefaultDisplaySync()
+    return defaultDisplay.width > defaultDisplay.height
+  }
+
   // Google Pinyin's height or a percentage of the screen, like fcitx5-android (InsightKey).
   private resizePanel() {
     if (!this.panel) {
@@ -576,7 +632,8 @@ export class KeyboardController {
       const percent = landscape ? settings.heightPercentLandscape : settings.heightPercentPortrait
       bodyHeight = height / density * percent / 100
     } else {
-      bodyHeight = googlePinyinBodyHeight(Math.min(width, height) / density, landscape)
+      bodyHeight = googlePinyinBodyHeight(Math.min(width, height) / density, landscape) *
+        (settings ? settings.heightRatio : 100) / 100
     }
     const panelHeight = Math.round((bodyHeight + BAR_HEIGHT) * density)
     if (panelHeight !== this.panelHeight) {
