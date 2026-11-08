@@ -113,6 +113,35 @@ static void setDefaultConfig(const std::string &files) {
     }
 }
 
+// Builds before isAndroid() covered HarmonyOS saved desktop defaults, which then win over
+// the Android ones. Switch those options once.
+static void migrateToAndroidDefaults(const std::string &files) {
+    constexpr int version = 1;
+    ::fs::path marker = ::fs::path(files) / "config" / "fcitx5" / "harmony-defaults-version";
+    int current = 0;
+    if (std::ifstream in(marker); in) {
+        in >> current;
+    }
+    if (current >= version) {
+        return;
+    }
+    RawConfig global;
+    global.setValueByPath("Behavior/ShareInputState", "All");
+    instance->globalConfig().load(global, true);
+    instance->globalConfig().safeSave();
+    // Pinyin is loaded on demand, so its config can still be changed here.
+    RawConfig pinyin;
+    readAsIni(pinyin, "conf/pinyin.conf");
+    pinyin.setValueByPath("PreeditMode", "Do not show");
+    pinyin.setValueByPath("PreeditCursorPositionAtBeginning", "False");
+    pinyin.setValueByPath("Prediction", "True");
+    pinyin.setValueByPath("ExtBEnabled", "False");
+    pinyin.setValueByPath("Fuzzy/Correction", "QWERTY");
+    safeSaveAsIni(pinyin, "conf/pinyin.conf");
+    ::fs::create_directories(marker.parent_path());
+    std::ofstream(marker) << version;
+}
+
 void init(const std::string &bundle, const std::string &resfile, const std::string &files, const std::string &locale) {
     setupLog();
     setupEnv(bundle, resfile, files, locale);
@@ -126,6 +155,7 @@ void init(const std::string &bundle, const std::string &resfile, const std::stri
     addonMgr.registerDefaultLoader(&getStaticAddon());
     instance->initialize();
     setDefaultConfig(files);
+    migrateToAndroidDefaults(files);
     dispatcher = std::make_unique<fcitx::EventDispatcher>();
     dispatcher->attach(&instance->eventLoop());
     fcitx_thread = std::thread([] { instance->eventLoop().exec(); });
