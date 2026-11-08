@@ -1117,26 +1117,25 @@ index 4b77d0f..40471fb 100644
    }
    return toolbar
 diff --git a/src/ux.ts b/src/ux.ts
-index 892f0e9..2186c31 100644
+index 892f0e9..fdfb35e 100644
 --- a/src/ux.ts
 +++ b/src/ux.ts
-@@ -6,7 +6,6 @@ import CheckMark from 'bundle-text:../svg/checkmark.svg'
- import Enter from 'bundle-text:../svg/enter.svg'
- import Search from 'bundle-text:../svg/search.svg'
- import Send from 'bundle-text:../svg/send.svg'
--import { showContextmenu } from './contextmenu'
- import { setDisplayMode } from './display'
- import { renderRow } from './key'
+@@ -12,7 +12,7 @@ import { renderRow } from './key'
  import { hidePopover, showPopover, updateHighlight } from './popover'
-@@ -23,7 +22,6 @@ let shiftReleased = true
- let keyPressedWithShiftPressed = false
- let enterKeyType = ''
- let spaceKeyLabel = ''
--let inputMethods_: InputMethod[] = []
- const touches: { [key: string]: {
+ import { getContainer, getKey, press, release } from './util'
+ 
+-type TouchState = 'HIT' | 'PRESSING' | 'SWIPING' | 'DOWN' | 'INTERRUPTED'
++type TouchState = 'HIT' | 'PRESSING' | 'SWIPING' | 'DOWN' | 'INTERRUPTED' | 'REPEATING'
+ 
+ let layout_: Layout
+ let currentLayer = 'default'
+@@ -28,10 +28,13 @@ const touches: { [key: string]: {
    touch: Touch
    state: TouchState
-@@ -32,6 +30,7 @@ const touches: { [key: string]: {
+   timer: number | null
++  // Backspace held down, like fcitx5-android's repeat behavior.
++  repeat: number | null
+   longPress?: LongPress
    index: number
    type: Key['type'] | undefined
    swipeUp?: Swipe
@@ -1144,7 +1143,37 @@ index 892f0e9..2186c31 100644
    startX: number
    startY: number
    lastX: number
-@@ -74,6 +73,11 @@ export function sendEvent(event: VirtualKeyboardEvent) {
+@@ -41,6 +44,7 @@ const slideStep = 10
+ 
+ const DOUBLE_TAP_INTERVAL = 300 // Same with f5a.
+ export const LONG_PRESS_THRESHOLD = 300
++const REPEAT_INTERVAL = 50 // Same with f5a.
+ export const DRAG_THRESHOLD = 10 // radius^2
+ const SWIPE_THRESHOLD = 10
+ 
+@@ -60,6 +64,21 @@ function cancelLongPress(touchId: number) {
+   }
+ }
+ 
++function stopRepeat(touchId: number) {
++  const { repeat } = touches[touchId]
++  if (repeat) {
++    clearInterval(repeat)
++    touches[touchId].repeat = null
++  }
++}
++
++function startRepeat(touchId: number) {
++  touches[touchId].timer = null
++  touches[touchId].state = 'REPEATING'
++  backspace()
++  touches[touchId].repeat = window.setInterval(backspace, REPEAT_INTERVAL)
++}
++
+ export function setLayout(layout: Layout) {
+   layout_ = layout
+ }
+@@ -74,6 +93,11 @@ export function sendEvent(event: VirtualKeyboardEvent) {
    client_.sendEvent(event)
  }
  
@@ -1156,7 +1185,7 @@ index 892f0e9..2186c31 100644
  export function undo() {
    sendEvent({ type: 'UNDO' })
  }
-@@ -155,6 +159,9 @@ function touchDown(touch: Touch) {
+@@ -155,6 +179,9 @@ function touchDown(touch: Touch) {
      case 'globe':
        sendEvent({ type: 'GLOBE' })
        break
@@ -1166,7 +1195,15 @@ index 892f0e9..2186c31 100644
    }
  }
  
-@@ -194,10 +201,13 @@ function interrupt(touchId: number) {
+@@ -187,6 +214,7 @@ function interrupt(touchId: number) {
+       case 'DOWN':
+         break
+       default:
++        stopRepeat(Number(id))
+         touches[id].state = 'INTERRUPTED'
+         hidePopover()
+     }
+@@ -194,10 +222,13 @@ function interrupt(touchId: number) {
  }
  
  function getSwipe(touch: Touch) {
@@ -1181,7 +1218,7 @@ index 892f0e9..2186c31 100644
    return undefined
  }
  
-@@ -250,19 +260,11 @@ function swipeRelease(touch: Touch) {
+@@ -250,18 +281,21 @@ function swipeRelease(touch: Touch) {
    }
  }
  
@@ -1190,21 +1227,24 @@ index 892f0e9..2186c31 100644
    touches[touchId].timer = null
    touches[touchId].state = 'PRESSING'
 -  if (touches[touchId].type === 'globe') {
--    showContextmenu(container, inputMethods_.map(inputMethod => ({
--      text: inputMethod.displayName,
--      callback() { sendEvent({ type: 'SET_INPUT_METHOD', data: inputMethod.name }) },
--    })))
--  }
--  else {
++  const { touch, longPress, type } = touches[touchId]
++  const container = getContainer(touch)!
++  if (type === 'space') {
++    // Long press space picks an input method, like fcitx5-android.
++    hidePopover()
+     showContextmenu(container, inputMethods_.map(inputMethod => ({
+       text: inputMethod.displayName,
+       callback() { sendEvent({ type: 'SET_INPUT_METHOD', data: inputMethod.name }) },
+     })))
+   }
+   else {
 -    const { touch, longPress } = touches[touchId]
 -    showPopover(getContainer(touch)!, longPress!)
--  }
-+  const { touch, longPress } = touches[touchId]
-+  showPopover(getContainer(touch)!, longPress!)
++    showPopover(container, longPress!)
+   }
  }
  
- function moveHighlight(touch: Touch) {
-@@ -288,22 +290,22 @@ export function onTouchStart(event: TouchEvent) {
+@@ -288,24 +322,32 @@ export function onTouchStart(event: TouchEvent) {
    let container = getContainer(touch)
    const key = getKey(container)
    let swipeUp: Swipe | undefined
@@ -1230,16 +1270,76 @@ index 892f0e9..2186c31 100644
 +          timer = window.setTimeout(longPressHandler, LONG_PRESS_THRESHOLD, touch.identifier)
            longPress = key.longPress
          }
++        // Preview the key above the finger, fcitx5-android's popup on key press.
++        showPopover(container!, key.label)
++        break
++      case 'space':
++        timer = window.setTimeout(longPressHandler, LONG_PRESS_THRESHOLD, touch.identifier)
++        break
++      case 'backspace':
++        timer = window.setTimeout(startRepeat, LONG_PRESS_THRESHOLD, touch.identifier)
          break
-@@ -318,6 +320,7 @@ export function onTouchStart(event: TouchEvent) {
+     }
+   }
+@@ -316,8 +358,10 @@ export function onTouchStart(event: TouchEvent) {
+     touch,
+     state,
      timer,
++    repeat: null,
      type: key?.type,
      swipeUp,
 +    swipeDown,
      longPress,
      index: longPress?.index ?? 0,
      startX: touch.clientX,
-@@ -438,11 +441,19 @@ export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
+@@ -343,7 +387,9 @@ export function onTouchMove(event: TouchEvent) {
+       doSwipe(touch)
+       break
+     case 'PRESSING':
+-      moveHighlight(touch)
++      if (touches[touch.identifier].longPress) {
++        moveHighlight(touch)
++      }
+       break
+   }
+ }
+@@ -352,12 +398,14 @@ export function onTouchEnd(event: TouchEvent) {
+   const touchId = event.changedTouches[0].identifier
+   interrupt(touchId)
+   cancelLongPress(touchId)
++  stopRepeat(touchId)
+   const { touch, state, type } = touches[touchId]
+   const container = getContainer(touch)
+   container && release(container)
+ 
+   switch (state) {
+     case 'HIT':
++      hidePopover()
+       touchDown(touch)
+       // fall through
+     case 'DOWN':
+@@ -375,11 +423,18 @@ export function onTouchEnd(event: TouchEvent) {
+       }
+       break
+     case 'PRESSING':
+-      hidePopover()
+-      longPressRelease(touchId)
++      // The input method menu stays open for a tap.
++      if (type !== 'space') {
++        hidePopover()
++        longPressRelease(touchId)
++      }
+       break
+   }
+   delete touches[touchId]
++  // A key preview may be left by a touch interrupted by another one.
++  if (Object.keys(touches).length === 0 && state !== 'PRESSING') {
++    hidePopover()
++  }
+ }
+ 
+ export function setLayer(id: string, locked: boolean) {
+@@ -438,11 +493,20 @@ export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
    }
  }
  
@@ -1253,7 +1353,7 @@ index 892f0e9..2186c31 100644
 +}
 +
  export function setInputMethods(inputMethods: InputMethod[], currentInputMethod: string) {
--  inputMethods_ = inputMethods
+   inputMethods_ = inputMethods
    for (const inputMethod of inputMethods) {
      if (inputMethod.name === currentInputMethod) {
 -      setSpaceKeyLabel(null, inputMethod.displayName)
