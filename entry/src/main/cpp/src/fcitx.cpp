@@ -2,8 +2,10 @@
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/standardpath.h>
+#include <fcitx-config/rawconfig.h>
 #include <fcitx/action.h>
 #include <fcitx/addonmanager.h>
+#include <fcitx/globalconfig.h>
 #include <fcitx/instance.h>
 #include <fcitx/userinterfacemanager.h>
 #include <thread>
@@ -15,6 +17,8 @@
 #include "../harmonyfrontend/harmonyfrontend.h"
 #include "../webkeyboard/webkeyboard.h"
 #include "inputmethod.h"
+#include "googlepinyin_public.h"
+#include "googlepinyin_userdata.h"
 
 #ifdef __x86_64__
 #define ARCH "x86_64"
@@ -50,7 +54,7 @@ void setupLog() {
     fcitx::Log::setLogRule("*=5,notimedate");
 }
 
-void setupEnv(const std::string &bundle, const std::string &resfile) {
+void setupEnv(const std::string &bundle, const std::string &resfile, const std::string &files) {
     // resfile is /data/storage/el1/bundle/entry/resources/resfile
     ::fs::path bundlePath = bundle;
     ::fs::path resfilePath = resfile;
@@ -64,11 +68,33 @@ void setupEnv(const std::string &bundle, const std::string &resfile) {
     setenv("FCITX_DATA_DIRS", fcitx_data_dirs.c_str(), 1);
     setenv("LIBIME_MODEL_DIRS", libime_model_dirs.c_str(), 1);
     setenv("XKB_CONFIG_ROOT", xkb_config_root.c_str(), 1);
+    // User config and data (pinyin user.dict and user.history) live in the app's files dir,
+    // which the main ability shares, e.g. to export user words.
+    ::fs::path filesPath = files;
+    std::string xdg_config_home = filesPath / "config";
+    std::string xdg_data_home = filesPath / "data";
+    std::string xdg_cache_home = filesPath / "cache";
+    setenv("XDG_CONFIG_HOME", xdg_config_home.c_str(), 1);
+    setenv("XDG_DATA_HOME", xdg_data_home.c_str(), 1);
+    setenv("XDG_CACHE_HOME", xdg_cache_home.c_str(), 1);
 }
 
-void init(const std::string &bundle, const std::string &resfile) {
+// Google Pinyin defaults on first run: start in Chinese, and keep the Chinese/English
+// state when switching apps.
+static void setDefaultGlobalConfig(const std::string &files) {
+    if (::fs::exists(::fs::path(files) / "config" / "fcitx5" / "config")) {
+        return;
+    }
+    RawConfig raw;
+    raw.setValueByPath("Behavior/ActiveByDefault", "True");
+    raw.setValueByPath("Behavior/ShareInputState", "All");
+    instance->globalConfig().load(raw, true);
+    instance->globalConfig().safeSave();
+}
+
+void init(const std::string &bundle, const std::string &resfile, const std::string &files) {
     setupLog();
-    setupEnv(bundle, resfile);
+    setupEnv(bundle, resfile, files);
     // f5a and f5j need it. Not sure if f5h needs it but just do it.
     umask(007);
     StandardPath::global().syncUmask(); // Must happen after setupEnv.
@@ -78,12 +104,14 @@ void init(const std::string &bundle, const std::string &resfile) {
     auto &addonMgr = instance->addonManager();
     addonMgr.registerDefaultLoader(&getStaticAddon());
     instance->initialize();
+    setDefaultGlobalConfig(files);
     dispatcher = std::make_unique<fcitx::EventDispatcher>();
     dispatcher->attach(&instance->eventLoop());
     fcitx_thread = std::thread([] { instance->eventLoop().exec(); });
     frontend = dynamic_cast<HarmonyFrontend *>(addonMgr.addon("harmonyfrontend"));
     ui = dynamic_cast<WebKeyboard *>(addonMgr.addon("webkeyboard"));
-    setInputMethods({"keyboard-us", "keyboard-th", "pinyin"}); // XXX: for test only.
+    // Google Pinyin has no other input methods: globe and 中/英 only toggle these two.
+    setInputMethods({"keyboard-us", "pinyin"});
 }
 
 void focusIn(bool clientPreedit) {
@@ -221,5 +249,29 @@ void setCurrentInputMethod(const std::string &inputMethod) {
 
 void scroll(int start, int count) {
     with_fcitx([=] { ui->scroll(start, count); });
+}
+
+void save() {
+    with_fcitx([] { instance->save(); });
+}
+
+std::string importGooglePinyinWords(const std::string &tsv) {
+    return with_fcitx([&tsv]() -> std::string {
+        auto *pinyin = instance->addonManager().addon("pinyin", true);
+        if (!pinyin) {
+            FCITX_ERROR() << "pinyin addon not available";
+            return "";
+        }
+        return pinyin->call<IPinyinEngine::importGooglePinyinWords>(tsv);
+    });
+}
+
+std::string readPinyinUserWords(const std::string &dictPath, const std::string &historyPath) {
+    try {
+        return googlepinyin::toTsv(googlepinyin::readUserWords(dictPath, historyPath));
+    } catch (const std::exception &e) {
+        FCITX_ERROR() << "Failed to read pinyin user words: " << e.what();
+        return "";
+    }
 }
 } // namespace fcitx

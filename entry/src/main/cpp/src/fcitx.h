@@ -15,7 +15,7 @@ struct InputContextState {
     bool accepted;
 };
 
-void init(const std::string &bundle, const std::string &resfile);
+void init(const std::string &bundle, const std::string &resfile, const std::string &files);
 void focusIn(bool clientPreedit);
 void focusOut();
 InputContextState reset();
@@ -27,4 +27,10 @@ void activateStatusAreaAction(int id);
 void toggle();
 void setCurrentInputMethod(const std::string &inputMethod);
 void scroll(int start, int count);
+void save();
+// Google Pinyin user words, UTF-8 lines of "word\tpin'yin\tcount".
+// Merge into the running pinyin engine. Returns "added existing invalid".
+std::string importGooglePinyinWords(const std::string &tsv);
+// Read user words from saved pinyin user data files, without a running engine.
+std::string readPinyinUserWords(const std::string &dictPath, const std::string &historyPath);
 } // namespace fcitx

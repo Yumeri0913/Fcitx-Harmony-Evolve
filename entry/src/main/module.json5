@@ -15,6 +15,14 @@
     "pages": "$profile:main_pages",
     "requestPermissions": [
       {
+        "name": "ohos.permission.VIBRATE",
+        "reason": "$string:VIBRATE_reason",
+        "usedScene": {
+          "abilities": ["InputMethodExtensionAbility"],
+          "when": "inuse"
+        }
+      },
+      {
         "name": "ohos.permission.INTERNET",
         "reason": "$string:INTERNET_reason",
         "usedScene": {

@@ -8,7 +8,7 @@ export default class FcitxInputMethodService extends InputMethodExtensionAbility
     keyboardController.onCreate(this.context)
     const bundle = this.context.bundleCodeDir
     const resfile = this.context.resourceDir
-    fcitx.init(bundle, resfile)
+    fcitx.init(bundle, resfile, this.context.filesDir)
   }
 
   onDestroy(): void {

@@ -3,11 +3,56 @@ import type { InputMethodExtensionContext } from '@kit.IMEKit';
 import { inputMethodEngine } from '@kit.IMEKit';
 import { display } from '@kit.ArkUI';
 import { KeyCode } from '@kit.InputKit';
+import { vibrator } from '@kit.SensorServiceKit';
 import { SystemEvent, VirtualKeyboardEvent } from '../../../fcitx5-keyboard-web/src/api';
 import fcitx, { InputContextState } from 'libentry.so';
 import { FcitxEvent } from './FcitxEvent';
 import { convertCode } from './keycode';
 import { onTextChange, redo, resetStacks, undo } from './TextOperation';
+import {
+  ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath, readText,
+  removeFile, writeText
+} from '../../common/Settings';
+
+// Google Pinyin 4.x keyboard_body_height in vp (from its 4.5.2 dimens.xml): the key area
+// below its 40 vp candidate bar, by smallest screen width bucket. Same as fcitx5-android
+// (InsightKey fork) KeyboardHeightMode and the fcitx5-ios uipanel.
+const BAR_HEIGHT = 40
+
+function googlePinyinBodyHeight(smallestScreenWidth: number, landscape: boolean): number {
+  if (landscape) {
+    if (smallestScreenWidth >= 768) {
+      return 328
+    }
+    if (smallestScreenWidth >= 600) {
+      return 241
+    }
+    if (smallestScreenWidth >= 400) {
+      return 176
+    }
+    return 162
+  }
+  if (smallestScreenWidth >= 600) {
+    return 287
+  }
+  if (smallestScreenWidth >= 400) {
+    return 242
+  }
+  return 209
+}
+
+const hapticEffects: Record<string, vibrator.HapticFeedback> = {
+  'light': vibrator.HapticFeedback.EFFECT_SOFT,
+  'medium': vibrator.HapticFeedback.EFFECT_HARD,
+  'heavy': vibrator.HapticFeedback.EFFECT_SHARP,
+}
+
+// Fallback for devices without haptic presets.
+const hapticDurations: Record<string, number> = {
+  'light': 10,
+  'medium': 20,
+  'heavy': 30,
+}
 
 const ability: inputMethodEngine.InputMethodAbility = inputMethodEngine.getInputMethodAbility();
 const keyboardDelegate = inputMethodEngine.getKeyboardDelegate() // Physical keyboard
@@ -32,6 +77,9 @@ export class KeyboardController {
   private selecting = false
   private backspaceSelectionCount = 0
   private pendingEvents: SystemEvent[] = []
+  private filesDir = ''
+  private settings: KeyboardSettings | null = null
+  private hapticPresetSupported = true
 
   constructor() {
   }
@@ -42,6 +90,8 @@ export class KeyboardController {
       this.processAsyncData(data)
     })
     this.ctx = context;
+    this.filesDir = context.filesDir
+    this.loadSettings()
     this.initWindow();
     this.registerListener();
   }
@@ -329,6 +379,8 @@ export class KeyboardController {
         break
       case 'GLOBE':
         return fcitx.toggle()
+      case 'HAPTIC':
+        return this.vibrate()
       case 'KEY_DOWN':
         return this.handleKey(event.data.key, convertCode(event.data.code))
       case 'PASTE':
@@ -371,7 +423,9 @@ export class KeyboardController {
     const defaultDisplay = display.getDefaultDisplaySync()
     const width = defaultDisplay.width
     const height = defaultDisplay.height
-    let containerHeight = Math.min(width / 3 * 2, height / 3) // Same with xiaoyi on emulator
+    const density = defaultDisplay.densityPixels
+    const bodyHeight = googlePinyinBodyHeight(Math.min(width, height) / density, width > height)
+    const containerHeight = Math.round((bodyHeight + BAR_HEIGHT) * density)
     let panelInfo: inputMethodEngine.PanelInfo = {
       type: inputMethodEngine.PanelType.SOFT_KEYBOARD,
       flag: inputMethodEngine.PanelFlag.FLG_FIXED
@@ -380,15 +434,85 @@ export class KeyboardController {
       this.panel = inputPanel;
       this.panel.on('show', () => {
         console.debug('show')
+        // Settings may have been changed in the main app.
+        this.loadSettings()
+        this.applyPendingImport()
       })
       this.panel.on('hide', () => {
         console.debug('hide')
         this.processResult(fcitx.reset()) // Need it when dragging right edge to collapse keyboard.
         this.sendEvent({ type: 'HIDE' })
+        // Persist learned words now instead of waiting for the periodic save, like
+        // fcitx5-android. The main app exports user words from the saved files.
+        fcitx.save()
       })
       this.panel.resize(width, containerHeight)
       this.panel.setUiContent('InputMethodExtensionAbility/pages/VirtualKeyboard')
     })
+  }
+
+  private loadSettings() {
+    const settings = loadSettings(this.filesDir)
+    this.settings = settings
+    this.sendEvent({ type: 'CONFIG', data: { theme: settings.theme, keyBorder: settings.keyBorder } })
+  }
+
+  // Google Pinyin vibrates on touch down.
+  private vibrate() {
+    const settings = this.settings
+    if (!settings || !settings.vibrate) {
+      return
+    }
+    const attribute: vibrator.VibrateAttribute = { id: 0, usage: 'touch' }
+    if (this.hapticPresetSupported) {
+      const effect: vibrator.VibratePreset = {
+        type: 'preset',
+        effectId: hapticEffects[settings.vibrationStrength],
+        count: 1,
+      }
+      vibrator.startVibration(effect, attribute).catch((e: Error) => {
+        console.error(`haptic preset failed: ${e.message}`)
+        this.hapticPresetSupported = false
+      })
+      return
+    }
+    const effect: vibrator.VibrateTime = { type: 'time', duration: hapticDurations[settings.vibrationStrength] }
+    vibrator.startVibration(effect, attribute).catch((e: Error) => {
+      console.error(`vibration failed: ${e.message}`)
+    })
+  }
+
+  // The main app queues Google Pinyin words; merge them into the running pinyin engine.
+  private applyPendingImport() {
+    try {
+      this.mergePendingImport()
+    } catch (e) {
+      console.error(`Google Pinyin import failed: ${e}`)
+    }
+  }
+
+  private mergePendingImport() {
+    const path = pendingImportPath(this.filesDir)
+    const tsv = readText(path)
+    if (tsv === null) {
+      return
+    }
+    removeFile(path)
+    const counts = fcitx.importGooglePinyinWords(tsv).split(' ').map((n: string) => Number.parseInt(n))
+    if (counts.length !== 3 || counts.some((n: number) => Number.isNaN(n))) {
+      console.error('Google Pinyin import failed')
+      return
+    }
+    const skipped = Number.parseInt(readText(pendingSkippedPath(this.filesDir)) ?? '0')
+    removeFile(pendingSkippedPath(this.filesDir))
+    const result: ImportResult = {
+      added: counts[0],
+      existing: counts[1],
+      invalid: counts[2],
+      skipped: Number.isNaN(skipped) ? 0 : skipped,
+      time: Date.now(),
+    }
+    writeText(importResultPath(this.filesDir), JSON.stringify(result))
   }
 
   private physicalKeyEventHandler(e: inputMethodEngine.KeyEvent): boolean {

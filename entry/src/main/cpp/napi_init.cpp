@@ -4,10 +4,11 @@
 #include "napihelper.h"
 
 API(init) {
-    GET_ARGS(2)
+    GET_ARGS(3)
     GET_STRING(bundle, 0)
     GET_STRING(resfile, 1)
-    fcitx::init(bundle, resfile);
+    GET_STRING(files, 2)
+    fcitx::init(bundle, resfile, files);
     return {};
 }
 
@@ -96,6 +97,26 @@ API(scroll) {
     return {};
 }
 
+API(save) {
+    fcitx::save();
+    return {};
+}
+
+API(importGooglePinyinWords) {
+    GET_ARGS(1)
+    GET_STRING(tsv, 0)
+    STRING(ret, fcitx::importGooglePinyinWords(tsv))
+    return ret;
+}
+
+API(readPinyinUserWords) {
+    GET_ARGS(2)
+    GET_STRING(dictPath, 0)
+    GET_STRING(historyPath, 1)
+    STRING(ret, fcitx::readPinyinUserWords(dictPath, historyPath))
+    return ret;
+}
+
 static void CallJs(napi_env env, napi_value jsCb, void *context, void *data) {
     if (env == nullptr) {
         return;
@@ -133,6 +154,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"askCandidateActions", nullptr, askCandidateActions, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"activateCandidateAction", nullptr, activateCandidateAction, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"scroll", nullptr, scroll, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"save", nullptr, save, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"importGooglePinyinWords", nullptr, importGooglePinyinWords, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"readPinyinUserWords", nullptr, readPinyinUserWords, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setCurrentInputMethod", nullptr, setCurrentInputMethod, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"activateStatusAreaAction", nullptr, activateStatusAreaAction, nullptr, nullptr, nullptr, napi_default,
          nullptr}};

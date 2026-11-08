@@ -74,6 +74,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt install -y --no-install-recommends gettext
+          npm i -g pnpm@10
           ./scripts/install-deps.sh ${{ matrix.arch }}
 
       - name: Build HAP

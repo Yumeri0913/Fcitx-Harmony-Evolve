@@ -43,4 +43,5 @@ done
 
 RAW_DIR=entry/src/main/resources/rawfile
 mkdir -p $RAW_DIR
-wget -O $RAW_DIR/index.html https://github.com/fcitx-contrib/fcitx5-keyboard-web/releases/download/harmony/index.html
+# The keyboard is customized (Google Pinyin look), so build it instead of downloading the release.
+./scripts/build-keyboard.sh

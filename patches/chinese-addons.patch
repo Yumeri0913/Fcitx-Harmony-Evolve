@@ -1,8 +1,416 @@
+diff --git a/im/pinyin/CMakeLists.txt b/im/pinyin/CMakeLists.txt
+index 9e06e48..0d1e576 100644
+--- a/im/pinyin/CMakeLists.txt
++++ b/im/pinyin/CMakeLists.txt
+@@ -5,6 +5,7 @@ set(PINYIN_SOURCES
+     workerthread.cpp
+     pinyincandidate.cpp
+     pinyinenginefactory.cpp
++    googlepinyin_userdata.cpp
+ )
+ 
+ add_fcitx5_addon(pinyin ${PINYIN_SOURCES})
+diff --git a/im/pinyin/googlepinyin_public.h b/im/pinyin/googlepinyin_public.h
+new file mode 100644
+index 0000000..a8148f2
+--- /dev/null
++++ b/im/pinyin/googlepinyin_public.h
+@@ -0,0 +1,25 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Fcitx5 for Android Contributors
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ */
++#ifndef _PINYIN_GOOGLEPINYIN_PUBLIC_H_
++#define _PINYIN_GOOGLEPINYIN_PUBLIC_H_
++
++#include <string>
++#include <fcitx/addoninstance.h>
++
++// Exchange user words with Google Pinyin user dictionaries, see
++// googlepinyin_userdata.h. Words are UTF-8 lines of "word\tpin'yin\tcount".
++
++// Merge words into the running engine's user dict and history, then save.
++// Returns "added existing invalid".
++FCITX_ADDON_DECLARE_FUNCTION(PinyinEngine, importGooglePinyinWords,
++                             std::string(const std::string &tsv));
++
++// All words of the user dict, with usage counts from history.
++FCITX_ADDON_DECLARE_FUNCTION(PinyinEngine, exportGooglePinyinWords,
++                             std::string());
++
++#endif // _PINYIN_GOOGLEPINYIN_PUBLIC_H_
+diff --git a/im/pinyin/googlepinyin_userdata.cpp b/im/pinyin/googlepinyin_userdata.cpp
+new file mode 100644
+index 0000000..cf16747
+--- /dev/null
++++ b/im/pinyin/googlepinyin_userdata.cpp
+@@ -0,0 +1,242 @@
++/*
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * SPDX-FileCopyrightText: Copyright 2026 Fcitx5 for Android Contributors
++ */
++#include "googlepinyin_userdata.h"
++
++#include <algorithm>
++#include <charconv>
++#include <cstdio>
++#include <filesystem>
++#include <fstream>
++#include <sstream>
++#include <stdexcept>
++#include <unordered_map>
++#include <utility>
++
++#include <fcitx-utils/macros.h>
++#include <fcitx-utils/stringutils.h>
++#include <libime/core/historybigram.h>
++#include <libime/pinyin/pinyindictionary.h>
++#include <libime/pinyin/pinyinencoder.h>
++
++namespace googlepinyin {
++
++namespace {
++
++constexpr size_t kUserDict = libime::PinyinDictionary::UserDict;
++
++bool fileExists(const std::string &path) {
++    std::error_code ec;
++    return !path.empty() && std::filesystem::is_regular_file(path, ec);
++}
++
++/** throws when [pinyin] is not valid full pinyin */
++void validatePinyin(std::string_view pinyin) {
++    libime::PinyinEncoder::encodeFullPinyinWithFlags(
++        pinyin, libime::PinyinFuzzyFlag::VE_UE);
++}
++
++/** how many times each word occurs in history, like rawUnigramFrequency of newer libime */
++std::unordered_map<std::string, int32_t>
++historyWordCounts(libime::HistoryBigram &history) {
++    std::unordered_map<std::string, int32_t> counts;
++    std::stringstream dump;
++    history.dump(dump);
++    std::string line;
++    while (std::getline(dump, line)) {
++        for (auto word : fcitx::stringutils::split(line, " ")) {
++            counts[word]++;
++        }
++    }
++    return counts;
++}
++
++void loadDict(libime::PinyinDictionary &dict, const std::string &path) {
++    if (!fileExists(path)) {
++        return;
++    }
++    dict.load(kUserDict, path.c_str(), libime::PinyinDictFormat::Binary);
++}
++
++void loadHistory(libime::HistoryBigram &history, const std::string &path) {
++    if (!fileExists(path)) {
++        return;
++    }
++    std::ifstream in(path, std::ios::in | std::ios::binary);
++    if (!in) {
++        throw std::runtime_error("failed to open " + path);
++    }
++    history.load(in);
++}
++
++/** write to a sibling temp file and rename over [path] */
++template <typename Writer>
++void replaceFile(const std::string &path, Writer &&writer) {
++    const std::string tmp = path + ".tmp";
++    {
++        std::ofstream out(tmp, std::ios::out | std::ios::binary | std::ios::trunc);
++        if (!out) {
++            throw std::runtime_error("failed to open " + tmp);
++        }
++        writer(out);
++        out.flush();
++        if (!out) {
++            std::remove(tmp.c_str());
++            throw std::runtime_error("failed to write " + tmp);
++        }
++    }
++    std::error_code ec;
++    std::filesystem::rename(tmp, path, ec);
++    if (ec) {
++        std::remove(tmp.c_str());
++        throw std::runtime_error("failed to replace " + path + ": " + ec.message());
++    }
++}
++
++} // namespace
++
++int32_t historyRepeatsForCount(int32_t count) {
++    int32_t repeats = 1;
++    while (count > 1 && repeats < kMaxHistoryRepeats) {
++        count >>= 1;
++        repeats++;
++    }
++    return repeats;
++}
++
++MergeResult mergeIntoUserData(libime::PinyinDictionary &dict,
++                              libime::HistoryBigram &history,
++                              std::vector<UserWord> words) {
++    std::stable_sort(words.begin(), words.end(),
++                     [](const UserWord &a, const UserWord &b) {
++                         return a.count < b.count;
++                     });
++
++    MergeResult result;
++    for (const auto &w : words) {
++        try {
++            validatePinyin(w.pinyin);
++        } catch (const std::exception &) {
++            result.invalid++;
++            continue;
++        }
++        if (w.word.empty() || w.word.find('\0') != std::string::npos) {
++            result.invalid++;
++            continue;
++        }
++        if (dict.lookupWord(kUserDict, w.pinyin, w.word)) {
++            result.existing++;
++        } else {
++            // same cost as words learned by PinyinContext
++            dict.addWord(kUserDict, w.pinyin, w.word, 0);
++            result.added++;
++        }
++        const std::vector<std::string> sentence{w.word};
++        for (int32_t i = historyRepeatsForCount(w.count); i > 0; i--) {
++            history.add(sentence);
++        }
++    }
++    return result;
++}
++
++MergeResult mergeIntoUserData(const std::string &userDictPath,
++                              const std::string &historyPath,
++                              std::vector<UserWord> words) {
++    libime::PinyinDictionary dict;
++    loadDict(dict, userDictPath);
++    libime::HistoryBigram history;
++    loadHistory(history, historyPath);
++    auto result = mergeIntoUserData(dict, history, std::move(words));
++
++    replaceFile(userDictPath, [&dict](std::ostream &out) {
++        dict.save(kUserDict, out, libime::PinyinDictFormat::Binary);
++    });
++    replaceFile(historyPath,
++                [&history](std::ostream &out) { history.save(out); });
++    return result;
++}
++
++std::vector<UserWord> readUserWords(const std::string &dictPath,
++                                    const std::string &historyPath) {
++    if (!fileExists(dictPath)) {
++        return {};
++    }
++    libime::PinyinDictionary dict;
++    loadDict(dict, dictPath);
++    libime::HistoryBigram history;
++    const bool hasHistory = fileExists(historyPath);
++    if (hasHistory) {
++        loadHistory(history, historyPath);
++    }
++    return readUserWords(dict, hasHistory ? &history : nullptr);
++}
++
++std::vector<UserWord> readUserWords(libime::PinyinDictionary &dict,
++                                    libime::HistoryBigram *history) {
++    std::vector<UserWord> words;
++    const auto counts = history ? historyWordCounts(*history)
++                                : std::unordered_map<std::string, int32_t>{};
++    std::stringstream text;
++    dict.save(kUserDict, text, libime::PinyinDictFormat::Text);
++    std::string line;
++    while (std::getline(text, line)) {
++        // same tokenizer as PinyinDictionary::loadText of libime 1.1.12
++        auto tokens = fcitx::stringutils::split(line, FCITX_WHITESPACE);
++        if (tokens.size() < 2 || tokens[0].empty()) {
++            continue;
++        }
++        UserWord w{std::move(tokens[0]), std::move(tokens[1]), 1};
++        if (auto iter = counts.find(w.word); iter != counts.end()) {
++            w.count = std::max<int32_t>(1, iter->second);
++        }
++        words.push_back(std::move(w));
++    }
++    return words;
++}
++
++std::string toTsv(const std::vector<UserWord> &words) {
++    std::string out;
++    for (const auto &w : words) {
++        // tab/newline cannot be represented in this format, nor in Google Pinyin's
++        if (w.word.find_first_of("\t\n\r") != std::string::npos ||
++            w.pinyin.find_first_of("\t\n\r") != std::string::npos) {
++            continue;
++        }
++        out.append(w.word).push_back('\t');
++        out.append(w.pinyin).push_back('\t');
++        out.append(std::to_string(w.count)).push_back('\n');
++    }
++    return out;
++}
++
++std::vector<UserWord> fromTsv(std::string_view tsv) {
++    std::vector<UserWord> words;
++    while (!tsv.empty()) {
++        auto eol = tsv.find('\n');
++        auto line = tsv.substr(0, eol);
++        tsv = eol == std::string_view::npos ? std::string_view{}
++                                            : tsv.substr(eol + 1);
++        auto t1 = line.find('\t');
++        if (t1 == std::string_view::npos) {
++            continue;
++        }
++        auto t2 = line.find('\t', t1 + 1);
++        if (t2 == std::string_view::npos) {
++            continue;
++        }
++        auto countStr = line.substr(t2 + 1);
++        int32_t count = 1;
++        auto [ptr, ec] = std::from_chars(
++            countStr.data(), countStr.data() + countStr.size(), count);
++        if (ec != std::errc()) {
++            count = 1;
++        }
++        words.push_back(UserWord{std::string(line.substr(0, t1)),
++                                 std::string(line.substr(t1 + 1, t2 - t1 - 1)),
++                                 std::max<int32_t>(1, count)});
++    }
++    return words;
++}
++
++} // namespace googlepinyin
+diff --git a/im/pinyin/googlepinyin_userdata.h b/im/pinyin/googlepinyin_userdata.h
+new file mode 100644
+index 0000000..e907e03
+--- /dev/null
++++ b/im/pinyin/googlepinyin_userdata.h
+@@ -0,0 +1,103 @@
++/*
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * SPDX-FileCopyrightText: Copyright 2026 Fcitx5 for Android Contributors
++ */
++#ifndef FCITX5_GOOGLEPINYIN_USERDATA_H
++#define FCITX5_GOOGLEPINYIN_USERDATA_H
++
++#include <cstddef>
++#include <cstdint>
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace libime {
++class PinyinDictionary;
++class HistoryBigram;
++} // namespace libime
++
++/**
++ * Exchange user words between Google Pinyin user dictionary and fcitx5 pinyin user data.
++ *
++ * Platform independent: only depends on libime and fcitx5-utils, so it can be shared by
++ * fcitx5-android (through JNI), fcitx5-ios and fcitx5-harmony (inside the pinyin addon).
++ *
++ * fcitx5 pinyin keeps two user files under `$FCITX_DATA_HOME/pinyin/`:
++ * - `user.dict`: words learned while typing (libime PinyinDictionary, binary format)
++ * - `user.history`: usage history (libime HistoryBigram), which drives candidate ranking
++ *
++ * This copy targets libime 1.1.12, whose history has no pinyin validation code: words are
++ * added to history as plain words (like PinyinContext::learn there), and usage counts are
++ * read back from the history dump.
++ *
++ * Neither file may be touched while the pinyin engine is running: the engine only reads
++ * them on startup and overwrites them on save. Callers must stop the engine first.
++ */
++namespace googlepinyin {
++
++struct UserWord {
++    std::string word;
++    /** libime full pinyin, syllables joined by '\'' e.g. "ni'hao" */
++    std::string pinyin;
++    /** usage count, at least 1 */
++    int32_t count = 1;
++};
++
++struct MergeResult {
++    /** words added to user.dict */
++    size_t added = 0;
++    /** words already in user.dict, only their history got updated */
++    size_t existing = 0;
++    /** words rejected because of invalid pinyin */
++    size_t invalid = 0;
++};
++
++/**
++ * How many times a word with Google Pinyin usage [count] is added to history:
++ * 1 + floor(log2(count)), capped at [kMaxHistoryRepeats].
++ * Logarithmic so that the relative order of Google Pinyin's frequencies is kept without
++ * flooding the history pools (128 / 8192 / 65536 sentences).
++ */
++constexpr int32_t kMaxHistoryRepeats = 5;
++int32_t historyRepeatsForCount(int32_t count);
++
++/**
++ * Add [words] to user.dict and their usage to user.history.
++ * Words are applied in ascending count order, so that the most frequently used ones end up
++ * as the most recent history. Missing files are created. Files are replaced atomically.
++ */
++MergeResult mergeIntoUserData(const std::string &userDictPath,
++                              const std::string &historyPath,
++                              std::vector<UserWord> words);
++
++/**
++ * Same as above, on dictionary and history already in memory, e.g. those of a running
++ * pinyin engine. The caller saves them.
++ */
++MergeResult mergeIntoUserData(libime::PinyinDictionary &dict,
++                              libime::HistoryBigram &history,
++                              std::vector<UserWord> words);
++
++/**
++ * Read all words of a binary libime pinyin dictionary (e.g. user.dict).
++ * When [historyPath] names an existing history file, each word's count is its raw unigram
++ * frequency in history (at least 1); otherwise all counts are 1.
++ */
++std::vector<UserWord> readUserWords(const std::string &dictPath,
++                                    const std::string &historyPath);
++
++/**
++ * Same as above, on the user dictionary of [dict] in memory. [history] may be null.
++ */
++std::vector<UserWord> readUserWords(libime::PinyinDictionary &dict,
++                                    libime::HistoryBigram *history);
++
++/** Serialize as UTF-8 lines of "word\tpinyin\tcount\n" */
++std::string toTsv(const std::vector<UserWord> &words);
++
++/** Parse UTF-8 lines of "word\tpinyin\tcount"; malformed lines are skipped */
++std::vector<UserWord> fromTsv(std::string_view tsv);
++
++} // namespace googlepinyin
++
++#endif // FCITX5_GOOGLEPINYIN_USERDATA_H
 diff --git a/im/pinyin/pinyin.cpp b/im/pinyin/pinyin.cpp
-index bc19a12..853196c 100644
+index bc19a12..0e12b50 100644
 --- a/im/pinyin/pinyin.cpp
 +++ b/im/pinyin/pinyin.cpp
-@@ -894,13 +894,13 @@ void PinyinEngine::loadExtraDict() {
+@@ -12,6 +12,7 @@
+ #include "../../modules/cloudpinyin/cloudpinyin_public.h"
+ #include "config.h"
+ #include "customphrase.h"
++#include "googlepinyin_userdata.h"
+ #include "notifications_public.h"
+ #include "pinyincandidate.h"
+ #include "pinyinhelper_public.h"
+@@ -894,13 +895,13 @@ void PinyinEngine::loadExtraDict() {
      auto files =
          standardPath.locate(StandardPathsType::PkgData, "pinyin/dictionaries",
                              pathfilter::extension(".dict"));
@@ -18,7 +426,7 @@ index bc19a12..853196c 100644
      }
      FCITX_ASSERT(ime_->dict()->dictSize() >=
                   libime::TrieDictionary::UserDict + NumBuiltInDict + 1)
-@@ -909,7 +909,7 @@ void PinyinEngine::loadExtraDict() {
+@@ -909,7 +910,7 @@ void PinyinEngine::loadExtraDict() {
      ime_->dict()->removeFrom(libime::TrieDictionary::UserDict + NumBuiltInDict +
                               1);
      for (auto &file : files) {
@@ -27,3 +435,50 @@ index bc19a12..853196c 100644
              PINYIN_DEBUG() << "Dictionary: " << file.first << " is disabled.";
              continue;
          }
+@@ -2255,6 +2256,20 @@ void PinyinEngine::save() {
+         });
+ }
+ 
++std::string PinyinEngine::importGooglePinyinWords(const std::string &tsv) {
++    auto result = googlepinyin::mergeIntoUserData(
++        *ime_->dict(), ime_->model()->history(), googlepinyin::fromTsv(tsv));
++    save();
++    return std::to_string(result.added) + " " +
++           std::to_string(result.existing) + " " +
++           std::to_string(result.invalid);
++}
++
++std::string PinyinEngine::exportGooglePinyinWords() {
++    return googlepinyin::toTsv(googlepinyin::readUserWords(
++        *ime_->dict(), &ime_->model()->history()));
++}
++
+ std::string PinyinEngine::subMode(const InputMethodEntry &entry,
+                                   InputContext &inputContext) {
+     FCITX_UNUSED(inputContext);
+diff --git a/im/pinyin/pinyin.h b/im/pinyin/pinyin.h
+index c6e34a1..a82f5b3 100644
+--- a/im/pinyin/pinyin.h
++++ b/im/pinyin/pinyin.h
+@@ -8,6 +8,7 @@
+ #define _PINYIN_PINYIN_H_
+ 
+ #include "customphrase.h"
++#include "googlepinyin_public.h"
+ #include "symboldictionary.h"
+ #include "workerthread.h"
+ #include <cstddef>
+@@ -427,7 +428,13 @@ public:
+ 
+     const auto &selectionKeys() const { return selectionKeys_; }
+ 
++    std::string importGooglePinyinWords(const std::string &tsv);
++    std::string exportGooglePinyinWords();
++
+ private:
++    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, importGooglePinyinWords);
++    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, exportGooglePinyinWords);
++
+     void cloudPinyinSelected(InputContext *inputContext,
+                              const std::string &selected,
+                              const std::string &word);

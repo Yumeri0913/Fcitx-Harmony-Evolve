@@ -15,7 +15,7 @@ struct Index {
 
   build() {
     Stack() {
-      Flex().backgroundColor("#e3e4e6").width('100%').height('100%')
+      Flex().backgroundColor($r('app.color.keyboard_background')).width('100%').height('100%')
         .zIndex(99999).visibility(this.webReady ? Visibility.Hidden : Visibility.Visible)
       Web({ src: $rawfile('index.html'), controller: this.controller }).onPageEnd(() => {
         const ports = this.controller.createWebMessagePorts()

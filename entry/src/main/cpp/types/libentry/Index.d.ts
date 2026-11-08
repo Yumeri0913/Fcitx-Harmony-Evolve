@@ -1,4 +1,4 @@
-export const init: (bundle: string, resfile: string) => void
+export const init: (bundle: string, resfile: string, files: string) => void
 export const setCallback: (callback: (data: string) => void) => void
 export const focusIn: (clientPreedit: boolean) => void
 export const focusOut: () => void
@@ -18,3 +18,8 @@ export const activateCandidateAction: (index: number, id: number) => void
 export const activateStatusAreaAction: (id: number) => void
 export const setCurrentInputMethod: (inputMethod: string) => void
 export const scroll: (start: number, count: number) => void
+export const save: () => void
+// Google Pinyin user words, lines of "word\tpin'yin\tcount".
+// Returns "added existing invalid", or "" when pinyin is unavailable.
+export const importGooglePinyinWords: (tsv: string) => string
+export const readPinyinUserWords: (dictPath: string, historyPath: string) => string
