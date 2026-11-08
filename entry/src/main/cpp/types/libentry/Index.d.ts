@@ -19,6 +19,8 @@ export const activateStatusAreaAction: (id: number) => void
 export const setCurrentInputMethod: (inputMethod: string) => void
 export const scroll: (start: number, count: number) => void
 export const save: () => void
+// Apply conf/pinyin.conf written by the main app.
+export const reloadPinyinConfig: () => void
 // Google Pinyin user words, lines of "word\tpin'yin\tcount".
 // Returns "added existing invalid", or "" when pinyin is unavailable.
 export const importGooglePinyinWords: (tsv: string) => string

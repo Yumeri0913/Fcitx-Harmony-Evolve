@@ -102,6 +102,11 @@ API(save) {
     return {};
 }
 
+API(reloadPinyinConfig) {
+    fcitx::reloadPinyinConfig();
+    return {};
+}
+
 API(importGooglePinyinWords) {
     GET_ARGS(1)
     GET_STRING(tsv, 0)
@@ -155,6 +160,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"activateCandidateAction", nullptr, activateCandidateAction, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"scroll", nullptr, scroll, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"save", nullptr, save, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"reloadPinyinConfig", nullptr, reloadPinyinConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"importGooglePinyinWords", nullptr, importGooglePinyinWords, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"readPinyinUserWords", nullptr, readPinyinUserWords, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setCurrentInputMethod", nullptr, setCurrentInputMethod, nullptr, nullptr, nullptr, napi_default, nullptr},

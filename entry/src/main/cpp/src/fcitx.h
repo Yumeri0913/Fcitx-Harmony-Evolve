@@ -28,6 +28,8 @@ void toggle();
 void setCurrentInputMethod(const std::string &inputMethod);
 void scroll(int start, int count);
 void save();
+// Apply conf/pinyin.conf written by the main app.
+void reloadPinyinConfig();
 // Google Pinyin user words, UTF-8 lines of "word\tpin'yin\tcount".
 // Merge into the running pinyin engine. Returns "added existing invalid".
 std::string importGooglePinyinWords(const std::string &tsv);

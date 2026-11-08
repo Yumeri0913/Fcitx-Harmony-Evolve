@@ -8,6 +8,7 @@ import {
   ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath,
   pinyinHistoryPath, pinyinUserDictPath, readText, saveSettings, ThemeMode, VibrationStrength, writeText
 } from '../common/Settings';
+import { BoolOption, FUZZY_OPTIONS, GENERAL_OPTIONS, GOOGLE_PINYIN_FUZZY, PinyinConfig } from '../common/PinyinConfig';
 
 const THEMES: ThemeMode[] = ['system', 'light', 'dark']
 const THEME_NAMES: string[] = ['跟随系统', '浅色', '深色']
@@ -49,10 +50,37 @@ struct Index {
   private filesDir: string = this.context.filesDir
   @State settings: KeyboardSettings = loadSettings(this.filesDir)
   @State dictStatus: string = ''
+  @State generalValues: boolean[] = []
+  @State fuzzyValues: boolean[] = []
+
+  aboutToAppear() {
+    this.loadPinyinConfig()
+  }
 
   onPageShow() {
     this.settings = loadSettings(this.filesDir)
+    this.loadPinyinConfig()
     this.updateDictStatus()
+  }
+
+  private loadPinyinConfig() {
+    const config = PinyinConfig.load(this.filesDir)
+    this.generalValues = GENERAL_OPTIONS.map((o: BoolOption) => config.getBool(o))
+    this.fuzzyValues = FUZZY_OPTIONS.map((o: BoolOption) => config.getBool(o))
+  }
+
+  private setPinyinOptions(paths: string[], value: boolean) {
+    try {
+      const config = PinyinConfig.load(this.filesDir)
+      config.fillDefaults(GENERAL_OPTIONS)
+      for (const path of paths) {
+        config.setBool(path, value)
+      }
+      config.save(this.filesDir)
+    } catch (e) {
+      console.error(`Failed to save pinyin config: ${e}`)
+    }
+    this.loadPinyinConfig()
   }
 
   private save() {
@@ -190,6 +218,38 @@ struct Index {
         }
         .width('100%')
         .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+
+        this.sectionTitle('拼音')
+        ForEach(GENERAL_OPTIONS, (option: BoolOption, index: number) => {
+          this.toggleRow(option.label, this.generalValues[index] ?? option.defaultValue, (isOn: boolean) => {
+            this.setPinyinOptions([option.path], isOn)
+          })
+        }, (option: BoolOption, index: number) => `${option.path}-${this.generalValues[index]}`)
+
+        this.sectionTitle('模糊音')
+        Text('谷歌拼音打开模糊音后默认勾选前六组。修改后下次弹出键盘时生效。')
+          .fontSize(14)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+          .padding({ left: 16, right: 16 })
+        Row({ space: 12 }) {
+          Button('谷歌拼音默认').layoutWeight(1).onClick(() => {
+            const others = FUZZY_OPTIONS.map((o: BoolOption) => o.path)
+              .filter((path: string) => !GOOGLE_PINYIN_FUZZY.includes(path))
+            this.setPinyinOptions(others, false)
+            this.setPinyinOptions(GOOGLE_PINYIN_FUZZY, true)
+          })
+          Button('全部关闭').layoutWeight(1).onClick(() => {
+            this.setPinyinOptions(FUZZY_OPTIONS.map((o: BoolOption) => o.path), false)
+          })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+        ForEach(FUZZY_OPTIONS, (option: BoolOption, index: number) => {
+          this.toggleRow(option.label, this.fuzzyValues[index] ?? option.defaultValue, (isOn: boolean) => {
+            this.setPinyinOptions([option.path], isOn)
+          })
+        }, (option: BoolOption, index: number) => `${option.path}-${this.fuzzyValues[index]}`)
 
         this.sectionTitle('谷歌拼音用户词库')
         Text('在谷歌拼音中导出用户字典（user-dictionary.txt），再在这里导入。' +

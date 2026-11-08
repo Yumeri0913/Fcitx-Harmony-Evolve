@@ -2,6 +2,7 @@
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/standardpath.h>
+#include <fcitx-config/iniparser.h>
 #include <fcitx-config/rawconfig.h>
 #include <fcitx/action.h>
 #include <fcitx/addonmanager.h>
@@ -79,17 +80,23 @@ void setupEnv(const std::string &bundle, const std::string &resfile, const std::
     setenv("XDG_CACHE_HOME", xdg_cache_home.c_str(), 1);
 }
 
-// Google Pinyin defaults on first run: start in Chinese, and keep the Chinese/English
-// state when switching apps.
-static void setDefaultGlobalConfig(const std::string &files) {
-    if (::fs::exists(::fs::path(files) / "config" / "fcitx5" / "config")) {
-        return;
+// Google Pinyin defaults on first run: start in Chinese, keep the Chinese/English
+// state when switching apps, and predict the next word.
+static void setDefaultConfig(const std::string &files) {
+    ::fs::path configDir = ::fs::path(files) / "config" / "fcitx5";
+    if (!::fs::exists(configDir / "config")) {
+        RawConfig raw;
+        raw.setValueByPath("Behavior/ActiveByDefault", "True");
+        raw.setValueByPath("Behavior/ShareInputState", "All");
+        instance->globalConfig().load(raw, true);
+        instance->globalConfig().safeSave();
     }
-    RawConfig raw;
-    raw.setValueByPath("Behavior/ActiveByDefault", "True");
-    raw.setValueByPath("Behavior/ShareInputState", "All");
-    instance->globalConfig().load(raw, true);
-    instance->globalConfig().safeSave();
+    // Pinyin is loaded on demand, so its config can still be written here.
+    if (!::fs::exists(configDir / "conf" / "pinyin.conf")) {
+        RawConfig raw;
+        raw.setValueByPath("Prediction", "True");
+        safeSaveAsIni(raw, "conf/pinyin.conf");
+    }
 }
 
 void init(const std::string &bundle, const std::string &resfile, const std::string &files) {
@@ -104,7 +111,7 @@ void init(const std::string &bundle, const std::string &resfile, const std::stri
     auto &addonMgr = instance->addonManager();
     addonMgr.registerDefaultLoader(&getStaticAddon());
     instance->initialize();
-    setDefaultGlobalConfig(files);
+    setDefaultConfig(files);
     dispatcher = std::make_unique<fcitx::EventDispatcher>();
     dispatcher->attach(&instance->eventLoop());
     fcitx_thread = std::thread([] { instance->eventLoop().exec(); });
@@ -253,6 +260,15 @@ void scroll(int start, int count) {
 
 void save() {
     with_fcitx([] { instance->save(); });
+}
+
+void reloadPinyinConfig() {
+    with_fcitx([] {
+        // Only when loaded: otherwise it reads the config when loading.
+        if (auto *pinyin = instance->addonManager().addon("pinyin")) {
+            pinyin->reloadConfig();
+        }
+    });
 }
 
 std::string importGooglePinyinWords(const std::string &tsv) {

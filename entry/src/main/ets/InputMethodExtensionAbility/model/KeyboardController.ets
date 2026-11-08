@@ -13,6 +13,7 @@ import {
   ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingSkippedPath, readText,
   removeFile, writeText
 } from '../../common/Settings';
+import { pinyinConfigMtime } from '../../common/PinyinConfig';
 
 // Google Pinyin 4.x keyboard_body_height in vp (from its 4.5.2 dimens.xml): the key area
 // below its 40 vp candidate bar, by smallest screen width bucket. Same as fcitx5-android
@@ -80,6 +81,8 @@ export class KeyboardController {
   private filesDir = ''
   private settings: KeyboardSettings | null = null
   private hapticPresetSupported = true
+  // pinyin.conf as last read or written by this process.
+  private pinyinConfigMtime = 0
 
   constructor() {
   }
@@ -436,6 +439,7 @@ export class KeyboardController {
         console.debug('show')
         // Settings may have been changed in the main app.
         this.loadSettings()
+        this.reloadPinyinConfigIfChanged()
         this.applyPendingImport()
       })
       this.panel.on('hide', () => {
@@ -444,7 +448,10 @@ export class KeyboardController {
         this.sendEvent({ type: 'HIDE' })
         // Persist learned words now instead of waiting for the periodic save, like
         // fcitx5-android. The main app exports user words from the saved files.
+        // Saving also writes configs from memory, so pick up the main app's changes first.
+        this.reloadPinyinConfigIfChanged()
         fcitx.save()
+        this.pinyinConfigMtime = pinyinConfigMtime(this.filesDir)
       })
       this.panel.resize(width, containerHeight)
       this.panel.setUiContent('InputMethodExtensionAbility/pages/VirtualKeyboard')
@@ -455,6 +462,14 @@ export class KeyboardController {
     const settings = loadSettings(this.filesDir)
     this.settings = settings
     this.sendEvent({ type: 'CONFIG', data: { theme: settings.theme, keyBorder: settings.keyBorder } })
+  }
+
+  private reloadPinyinConfigIfChanged() {
+    const mtime = pinyinConfigMtime(this.filesDir)
+    if (mtime !== this.pinyinConfigMtime) {
+      fcitx.reloadPinyinConfig()
+      this.pinyinConfigMtime = mtime
+    }
   }
 
   // Google Pinyin vibrates on touch down.
