@@ -5,6 +5,7 @@
 #include <fcitx-utils/standardpath.h>
 #include <fcitx-utils/standardpaths.h>
 #include <fstream>
+#include <iterator>
 #include <fcitx-config/iniparser.h>
 #include <fcitx-config/rawconfig.h>
 #include <fcitx/action.h>
@@ -511,6 +512,29 @@ std::string exportGooglePinyinWords() {
         // Not typed in pinyin since the keyboard started: read the saved files.
         auto dir = StandardPaths::global().userDirectory(StandardPathsType::PkgData) / "pinyin";
         return readPinyinUserWords(dir / "user.dict", dir / "user.history");
+    });
+}
+
+std::string importGooglePinyinLearned(const std::string &typed, const std::string &english) {
+    return with_fcitx([&typed, &english]() -> std::string {
+        auto *pinyin = instance->addonManager().addon("pinyin", true);
+        if (!pinyin) {
+            FCITX_ERROR() << "pinyin addon not available";
+            return "";
+        }
+        return pinyin->call<IPinyinEngine::importGooglePinyinLearned>(typed, english);
+    });
+}
+
+std::string exportLearnedEnglish() {
+    return with_fcitx([]() -> std::string {
+        if (auto *pinyin = instance->addonManager().addon("pinyin")) {
+            return pinyin->call<IPinyinEngine::exportLearnedEnglish>();
+        }
+        // Not typed in pinyin since the keyboard started: the saved file has the same format.
+        auto path = StandardPaths::global().userDirectory(StandardPathsType::PkgData) / "pinyin" / "user.english";
+        std::ifstream in(path);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     });
 }
 

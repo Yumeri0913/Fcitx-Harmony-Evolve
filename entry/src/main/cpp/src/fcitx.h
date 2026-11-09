@@ -46,6 +46,12 @@ void triggerUnicode();
 std::string importGooglePinyinWords(const std::string &tsv);
 // All pinyin user words with usage counts.
 std::string exportGooglePinyinWords();
+// What was typed for each word ("code\tword\tcount" lines) and English words
+// ("word\tcount" lines) of a Google Pinyin user dictionary. Merge into the
+// running pinyin engine. Returns "typed english" valid lines.
+std::string importGooglePinyinLearned(const std::string &typed, const std::string &english);
+// Learned English words, "word\tcount\tstamp" lines.
+std::string exportLearnedEnglish();
 // Read user words from saved pinyin user data files, without a running engine.
 std::string readPinyinUserWords(const std::string &dictPath, const std::string &historyPath);
 } // namespace fcitx

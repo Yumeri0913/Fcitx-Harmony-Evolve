@@ -79,6 +79,9 @@ export interface ImportResult {
   // Lines of the Google Pinyin file that were not Chinese words, e.g. English.
   skipped: number
   time: number
+  // English words, and entries of what was typed for which word (abbreviations included).
+  english?: number
+  typed?: number
 }
 
 function settingsPath(sharedDir: string): string {
@@ -92,6 +95,15 @@ function googlePinyinDir(sharedDir: string): string {
 // Words waiting for the input method to merge them into the pinyin engine.
 export function pendingImportPath(sharedDir: string): string {
   return `${googlePinyinDir(sharedDir)}/import.tsv`
+}
+
+// What was typed for each word and English words, merged with pendingImportPath.
+export function pendingTypedPath(sharedDir: string): string {
+  return `${googlePinyinDir(sharedDir)}/import.typed`
+}
+
+export function pendingEnglishPath(sharedDir: string): string {
+  return `${googlePinyinDir(sharedDir)}/import.english`
 }
 
 // Lines of the Google Pinyin file skipped by the main app, merged into the result.
@@ -137,6 +149,11 @@ export function userDataCopyPath(sharedDir: string, file: string): string {
 // User words written by the input method when the keyboard hides, for export.
 export function userWordsSnapshotPath(sharedDir: string): string {
   return `${googlePinyinDir(sharedDir)}/user-words.tsv`
+}
+
+// Learned English words, written with userWordsSnapshotPath.
+export function englishSnapshotPath(sharedDir: string): string {
+  return `${googlePinyinDir(sharedDir)}/user-english.tsv`
 }
 
 export function fileMtime(path: string): number {

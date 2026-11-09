@@ -4,11 +4,12 @@ import { common } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
 import { readBytes, writeBytes } from '../../common/Files';
 import {
-  decode, DEFAULT_FILE_NAME, fromTsv, parse, toGooglePinyinBytes, toTsv
+  decode, DEFAULT_FILE_NAME, englishFromTsv, englishToTsv, fromTsv, parse, toGooglePinyinBytes, toTsv,
+  typedToTsv
 } from '../../common/GooglePinyinUserDict';
 import {
-  ImportResult, importResultPath, pendingImportPath, pendingSkippedPath, fileMtime, readText,
-  userWordsSnapshotPath, writeText
+  englishSnapshotPath, ImportResult, importResultPath, pendingEnglishPath, pendingImportPath,
+  pendingSkippedPath, pendingTypedPath, fileMtime, readText, userWordsSnapshotPath, writeText
 } from '../../common/Settings';
 
 @Component
@@ -31,8 +32,9 @@ export struct UserDictPage {
     if (text !== null) {
       const result = JSON.parse(text) as ImportResult
       const time = new Date(result.time).toLocaleString()
+      const english = result.english ? `英文 ${result.english} 个，` : ''
       this.dictStatus = `上次导入（${time}）：新增 ${result.added} 个词，已有 ${result.existing} 个，` +
-        `跳过 ${result.skipped + result.invalid} 行（英文词或无效拼音）。`
+        `${english}跳过 ${result.skipped + result.invalid} 行（无法识别的拼音）。`
     }
   }
 
@@ -44,15 +46,19 @@ export struct UserDictPage {
         return
       }
       const result = parse(decode(readBytes(uris[0])))
-      if (result.entries.length === 0) {
+      if (result.entries.length === 0 && result.english.length === 0 && result.typed.length === 0) {
         this.dictStatus = `没有可导入的词，跳过 ${result.skipped} 行。请选择谷歌拼音导出的 ${DEFAULT_FILE_NAME}。`
         return
       }
       // The pinyin engine runs in the input method process, which merges the words.
-      writeText(pendingImportPath(this.filesDir), toTsv(result.entries))
+      // What was typed for each word ranks words like Google Pinyin; written first, as the
+      // input method starts merging when it sees the words.
+      writeText(pendingTypedPath(this.filesDir), typedToTsv(result.typed))
+      writeText(pendingEnglishPath(this.filesDir), englishToTsv(result.english))
       writeText(pendingSkippedPath(this.filesDir), `${result.skipped}`)
-      this.dictStatus = `已读取 ${result.entries.length} 个词，跳过 ${result.skipped} 行。` +
-        '下次弹出键盘时合并进拼音用户词库。'
+      writeText(pendingImportPath(this.filesDir), toTsv(result.entries))
+      this.dictStatus = `已读取 ${result.entries.length} 个词、${result.english.length} 个英文词，` +
+        `跳过 ${result.skipped} 行。下次弹出键盘时合并进拼音用户词库。`
     } catch (e) {
       this.dictStatus = `导入失败：${e}`
     }
@@ -68,7 +74,8 @@ export struct UserDictPage {
         return
       }
       const entries = fromTsv(tsv)
-      if (entries.length === 0) {
+      const english = englishFromTsv(readText(englishSnapshotPath(this.filesDir)) ?? '')
+      if (entries.length === 0 && english.length === 0) {
         this.dictStatus = '拼音用户词库是空的。'
         return
       }
@@ -78,8 +85,9 @@ export struct UserDictPage {
       if (uris.length === 0) {
         return
       }
-      writeBytes(uris[0], toGooglePinyinBytes(entries))
-      this.dictStatus = `已导出 ${entries.length} 个词（截至 ${time} 收起键盘时），可在谷歌拼音的“导入用户字典”中使用。`
+      writeBytes(uris[0], toGooglePinyinBytes(entries, english))
+      this.dictStatus = `已导出 ${entries.length} 个词、${english.length} 个英文词（截至 ${time} 收起键盘时），` +
+        '可在谷歌拼音的“导入用户字典”中使用。'
     } catch (e) {
       this.dictStatus = `导出失败：${e}`
     }

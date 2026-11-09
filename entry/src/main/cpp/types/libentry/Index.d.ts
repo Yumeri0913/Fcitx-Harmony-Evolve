@@ -35,6 +35,12 @@ export const runPinyinAction: (action: string) => void
 export const importGooglePinyinWords: (tsv: string) => string
 // All pinyin user words, same format.
 export const exportGooglePinyinWords: () => string
+// What was typed for each word ("code\tword\tcount" lines) and English words ("word\tcount"
+// lines) of a Google Pinyin user dictionary. Returns "typed english", or "" when pinyin is
+// unavailable.
+export const importGooglePinyinLearned: (typed: string, english: string) => string
+// Learned English words, lines of "word\tcount\tstamp".
+export const exportLearnedEnglish: () => string
 
 // Settings for the main app, which runs its own fcitx on the shared config dir.
 export const initSettings: (bundle: string, resfile: string, files: string, shared: string, locale: string) => void

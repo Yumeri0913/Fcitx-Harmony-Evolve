@@ -19,7 +19,7 @@ import { convertCode } from './keycode';
 import { onTextChange, redo, resetStacks, undo } from './TextOperation';
 import {
   ImportResult, KeyboardSettings, loadSettings, importResultPath, pendingImportPath, pendingPinyinActionsPath,
-  pendingSkippedPath,
+  pendingSkippedPath, pendingTypedPath, pendingEnglishPath, englishSnapshotPath,
   readText, removeFile, userDataCopyPath, userWordsSnapshotPath, writeText, clipboardSyncId, clipboardSyncAccessPath
 } from '../../common/Settings';
 
@@ -725,6 +725,7 @@ export class KeyboardController {
     this.lastSnapshotTime = now
     try {
       writeText(userWordsSnapshotPath(this.sharedDir), fcitx.exportGooglePinyinWords())
+      writeText(englishSnapshotPath(this.sharedDir), fcitx.exportLearnedEnglish())
       // Saved just before, for backups in the main app.
       for (const file of ['user.dict', 'user.history']) {
         const from = `${this.filesDir}/data/fcitx5/pinyin/${file}`
@@ -790,12 +791,21 @@ export class KeyboardController {
     }
     const skipped = Number.parseInt(readText(pendingSkippedPath(this.sharedDir)) ?? '0')
     removeFile(pendingSkippedPath(this.sharedDir))
+    // What was typed for each word, and English words, for the pinyin engine's own tables.
+    const typed = readText(pendingTypedPath(this.sharedDir)) ?? ''
+    const english = readText(pendingEnglishPath(this.sharedDir)) ?? ''
+    removeFile(pendingTypedPath(this.sharedDir))
+    removeFile(pendingEnglishPath(this.sharedDir))
+    const learned = fcitx.importGooglePinyinLearned(typed, english).split(' ')
+      .map((n: string) => Number.parseInt(n))
     const result: ImportResult = {
       added: counts[0],
       existing: counts[1],
       invalid: counts[2],
       skipped: Number.isNaN(skipped) ? 0 : skipped,
       time: Date.now(),
+      typed: learned.length === 2 && !Number.isNaN(learned[0]) ? learned[0] : 0,
+      english: learned.length === 2 && !Number.isNaN(learned[1]) ? learned[1] : 0,
     }
     writeText(importResultPath(this.sharedDir), JSON.stringify(result))
     this.writeUserWordsSnapshot(true)

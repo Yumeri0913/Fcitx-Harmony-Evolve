@@ -12,10 +12,10 @@ index 9e06e48..0d1e576 100644
  add_fcitx5_addon(pinyin ${PINYIN_SOURCES})
 diff --git a/im/pinyin/englishuserwords.h b/im/pinyin/englishuserwords.h
 new file mode 100644
-index 0000000..f5c9351
+index 0000000..add6fb5
 --- /dev/null
 +++ b/im/pinyin/englishuserwords.h
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,265 @@
 +/*
 + * SPDX-FileCopyrightText: 2026-2026 Fcitx5 for Android Contributors
 + *
@@ -26,6 +26,7 @@ index 0000000..f5c9351
 +#define _PINYIN_ENGLISHUSERWORDS_H_
 +
 +#include <algorithm>
++#include <cmath>
 +#include <cstddef>
 +#include <cstdint>
 +#include <istream>
@@ -33,6 +34,7 @@ index 0000000..f5c9351
 +#include <ostream>
 +#include <string>
 +#include <string_view>
++#include <tuple>
 +#include <unordered_map>
 +#include <utility>
 +#include <vector>
@@ -136,6 +138,71 @@ index 0000000..f5c9351
 +        return result;
 +    }
 +
++    // Learned words as long as input that differ from it only where a touch
++    // keyboard offered the intended key as an alternative of the key hit.
++    // alternativesAt(i) returns the (key, natural log likelihood) list of
++    // input[i], the key hit first, or nullptr. The penalty of a word is how
++    // much less likely (log10) its keys were, plus correctionCost for each
++    // corrected key. Best (lowest penalty, then most used) first.
++    template <typename AlternativesAt>
++    std::vector<std::pair<std::string, float>>
++    lookupCorrected(std::string_view input, AlternativesAt alternativesAt,
++                    float maxPenalty, float correctionCost,
++                    size_t limit) const {
++        std::vector<std::tuple<float, uint32_t, std::string>> found;
++        if (!isLearnable(input)) {
++            return {};
++        }
++        const auto key = normalize(input);
++        for (const auto &[wordKey, entry] : words_) {
++            if (wordKey.size() != key.size() || wordKey == key) {
++                continue;
++            }
++            float penalty = 0;
++            bool ok = true;
++            for (size_t i = 0; i < key.size() && ok; i++) {
++                if (wordKey[i] == key[i]) {
++                    continue;
++                }
++                const auto *alternatives = alternativesAt(i);
++                if (!alternatives || alternatives->empty() ||
++                    alternatives->front().first != key[i]) {
++                    ok = false;
++                    break;
++                }
++                auto iter = std::ranges::find_if(
++                    *alternatives,
++                    [c = wordKey[i]](const auto &a) { return a.first == c; });
++                if (iter == alternatives->end()) {
++                    ok = false;
++                    break;
++                }
++                penalty += std::max(0.0F, (alternatives->front().second -
++                                           iter->second) /
++                                              2.302585093F) +
++                           correctionCost;
++                ok = penalty <= maxPenalty;
++            }
++            if (ok) {
++                found.emplace_back(penalty, entry.count, entry.word);
++            }
++        }
++        std::ranges::sort(found, [](const auto &lhs, const auto &rhs) {
++            if (std::get<0>(lhs) != std::get<0>(rhs)) {
++                return std::get<0>(lhs) < std::get<0>(rhs);
++            }
++            return std::get<1>(lhs) > std::get<1>(rhs);
++        });
++        std::vector<std::pair<std::string, float>> result;
++        for (auto &[penalty, count, word] : found) {
++            if (result.size() >= limit) {
++                break;
++            }
++            result.emplace_back(std::move(word), penalty);
++        }
++        return result;
++    }
++
 +    // One word per line: word<TAB>count<TAB>stamp
 +    void load(std::istream &in) {
 +        words_.clear();
@@ -216,10 +283,10 @@ index 0000000..f5c9351
 +#endif // _PINYIN_ENGLISHUSERWORDS_H_
 diff --git a/im/pinyin/googlepinyin_public.h b/im/pinyin/googlepinyin_public.h
 new file mode 100644
-index 0000000..a8148f2
+index 0000000..9a98775
 --- /dev/null
 +++ b/im/pinyin/googlepinyin_public.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,36 @@
 +/*
 + * SPDX-FileCopyrightText: 2026 Fcitx5 for Android Contributors
 + *
@@ -243,6 +310,17 @@ index 0000000..a8148f2
 +// All words of the user dict, with usage counts from history.
 +FCITX_ADDON_DECLARE_FUNCTION(PinyinEngine, exportGooglePinyinWords,
 +                             std::string());
++
++// Merge what was typed for each word ("code\tword\tcount" lines, into
++// pinyin/user.typed) and English words ("word\tcount" lines, into
++// pinyin/user.english), keeping the larger count, then save. Returns
++// "typed english", the number of valid lines of each.
++FCITX_ADDON_DECLARE_FUNCTION(PinyinEngine, importGooglePinyinLearned,
++                             std::string(const std::string &typed,
++                                         const std::string &english));
++
++// Learned English words, "word\tcount\tstamp" lines like pinyin/user.english.
++FCITX_ADDON_DECLARE_FUNCTION(PinyinEngine, exportLearnedEnglish, std::string());
 +
 +#endif // _PINYIN_GOOGLEPINYIN_PUBLIC_H_
 diff --git a/im/pinyin/googlepinyin_userdata.cpp b/im/pinyin/googlepinyin_userdata.cpp
@@ -603,7 +681,7 @@ index 0000000..e907e03
 +
 +#endif // FCITX5_GOOGLEPINYIN_USERDATA_H
 diff --git a/im/pinyin/pinyin.cpp b/im/pinyin/pinyin.cpp
-index bc19a12..56bf9f6 100644
+index bc19a12..7a40939 100644
 --- a/im/pinyin/pinyin.cpp
 +++ b/im/pinyin/pinyin.cpp
 @@ -12,6 +12,7 @@
@@ -614,7 +692,115 @@ index bc19a12..56bf9f6 100644
  #include "notifications_public.h"
  #include "pinyincandidate.h"
  #include "pinyinhelper_public.h"
-@@ -499,6 +500,39 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
+@@ -20,6 +21,7 @@
+ #include "workerthread.h"
+ #include <algorithm>
+ #include <cassert>
++#include <cmath>
+ #include <cstdint>
+ #include <ctime>
+ #include <exception>
+@@ -85,6 +87,7 @@
+ #include <regex>
+ #include <stdexcept>
+ #include <string>
++#include <sstream>
+ #include <string_view>
+ #include <tuple>
+ #include <unordered_map>
+@@ -146,6 +149,43 @@ predictCandidateList(PinyinEngine *engine, const std::vector<T> &words) {
+     return candidateList;
+ }
+ 
++// Whether typed letters spell the selected words' pinyin, each syllable typed
++// in full or abbreviated to a prefix. A commit that does not (e.g. a pinyin
++// correction) is not recorded under what was typed.
++bool typedSpellsSelection(const libime::PinyinContext &context,
++                          std::string_view typed) {
++    std::vector<std::string> syllables;
++    for (const auto &[word, code] : context.selectedWordsWithPinyin()) {
++        if (code.empty()) {
++            // not from the pinyin dictionary, e.g. a learned English word
++            return true;
++        }
++        for (auto &syllable : stringutils::split(
++                 libime::PinyinEncoder::decodeFullPinyin(code), "'")) {
++            syllables.push_back(std::move(syllable));
++        }
++    }
++    std::vector<bool> reachable(typed.size() + 1, false);
++    reachable[0] = true;
++    for (const auto &syllable : syllables) {
++        std::vector<bool> next(typed.size() + 1, false);
++        for (size_t pos = 0; pos < typed.size(); pos++) {
++            if (!reachable[pos]) {
++                continue;
++            }
++            for (size_t len = 1;
++                 len <= syllable.size() && pos + len <= typed.size(); len++) {
++                if (typed[pos + len - 1] != syllable[len - 1]) {
++                    break;
++                }
++                next[pos + len] = true;
++            }
++        }
++        reachable = std::move(next);
++    }
++    return reachable[typed.size()];
++}
++
+ std::tuple<bool, int> englishNess(const std::string &input, bool sp) {
+     const auto pys = stringutils::split(input, " ");
+     constexpr int fullWeight = -2;
+@@ -394,9 +434,17 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
+     const auto &context = state->context_;
+     if (context.selected()) {
+         auto sentence = context.sentence();
++        state->undoTypedCode_.clear();
++        state->undoTypedWord_.clear();
+         if (!inputContext->capabilityFlags().testAny(
+                 CapabilityFlag::PasswordOrSensitive)) {
+             state->context_.learn();
++            if (const auto code = context.userInput();
++                typedSpellsSelection(context, TypedCodeHistory::key(code))) {
++                typedHistory_.learn(code, sentence);
++                state->undoTypedCode_ = code;
++                state->undoTypedWord_ = sentence;
++            }
+         }
+         inputContext->commitString(sentence);
+         inputContext->updatePreedit();
+@@ -443,6 +491,29 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
+         std::list<std::unique_ptr<PinyinAbstractExtraCandidateWordInterface>>
+             extraCandidates;
+         std::unordered_set<std::string> customCandidateSet;
++        /// Create candidates committed before for this input {{{
++        if (selectedLength <= context.cursor() && !typedHistory_.empty()) {
++            int position = 0;
++            for (auto &w : typedHistory_.lookup(pyBeforeCursor)) {
++                if (customCandidateSet.contains(w.word)) {
++                    continue;
++                }
++                customCandidateSet.insert(w.word);
++                if (EnglishUserWords::isLearnable(w.word)) {
++                    extraCandidates.push_back(
++                        std::make_unique<LearnedEnglishCandidateWord>(
++                            this, std::move(w.word), pyBeforeCursor.size(),
++                            position++));
++                } else {
++                    extraCandidates.push_back(
++                        std::make_unique<TypedHistoryCandidateWord>(
++                            this, std::move(w.word), pyBeforeCursor.size(),
++                            position++));
++                }
++            }
++        }
++        /// }}}
++
+         /// Create custom phrase candidate {{{
+         do {
+             const auto *results = customPhrase_.lookup(pyBeforeCursor);
+@@ -499,10 +570,50 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
          }
          /// }}}
  
@@ -635,18 +821,23 @@ index bc19a12..56bf9f6 100644
 +            // pinyin candidates first.
 +            int position = engNess ? (hasUpper ? 0 : 1) : 3;
 +            auto learned = englishWords_.lookup(pyBeforeCursor, 2);
-+            if (learned.exact) {
-+                learned.completions.insert(learned.completions.begin(),
-+                                           std::move(*learned.exact));
-+            }
-+            for (auto &word : learned.completions) {
++            auto add = [&](std::string word, int order) {
 +                if (customCandidateSet.contains(word)) {
-+                    continue;
++                    return;
 +                }
 +                customCandidateSet.insert(word);
 +                extraCandidates.push_back(
 +                    std::make_unique<LearnedEnglishCandidateWord>(
-+                        this, word, pyBeforeCursor.size(), position++));
++                        this, std::move(word), pyBeforeCursor.size(), order));
++            };
++            if (learned.exact) {
++                add(std::move(*learned.exact), position);
++            }
++            // Longer words only complete what was typed, after the words
++            // that match it.
++            int completionPosition = std::max(position + 1, 4);
++            for (auto &word : learned.completions) {
++                add(std::move(word), completionPosition++);
 +            }
 +        }
 +        /// }}}
@@ -654,7 +845,54 @@ index bc19a12..56bf9f6 100644
          /// Create spell candidate {{{
          auto [parsedPy, parsedPyCursor] = state->context_.preeditWithCursor(
              libime::PinyinPreeditMode::RawText);
-@@ -736,6 +770,22 @@ PinyinEngine::PinyinEngine(Instance *instance)
+-        if (*config_.spellEnabled && spell() &&
++        // Like Google Pinyin, no English hints for a few letters, which are
++        // mostly pinyin abbreviations.
++        if (*config_.spellEnabled && spell() && pyBeforeCursor.size() >= 4 &&
+             parsedPyCursor >= selectedSentence.size() &&
+             selectedLength <= context.cursor()) {
+             auto [hasUpper, engNess] =
+@@ -597,6 +708,18 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
+             }
+         };
+ 
++        // Symbols (emoji) of the top words wait until a few words are listed,
++        // so they do not push the next words down, unlike Google Pinyin.
++        constexpr int symbolsAfter = 5;
++        std::vector<std::unique_ptr<CandidateWord>> pendingSymbols;
++        auto flushSymbols = [&candidateList, &pendingSymbols](bool force) {
++            if (force || candidateList->totalSize() >= symbolsAfter) {
++                for (auto &symbol : pendingSymbols) {
++                    candidateList->append(std::move(symbol));
++                }
++                pendingSymbols.clear();
++            }
++        };
+         for (size_t idx = 0, end = candidates.size(); idx < end; idx++) {
+             const auto &candidate = candidates[idx];
+             auto candidateString = candidate.toString();
+@@ -636,15 +759,18 @@ void PinyinEngine::updateUI(InputContext *inputContext) {
+                     const bool isFull =
+                         candidate.sentence().back()->to()->index() ==
+                         pyBeforeCursor.size();
+-                    candidateList->append<SymbolCandidateWord>(
+-                        this, symbol, candidate, isFull);
++                    pendingSymbols.push_back(
++                        std::make_unique<SymbolCandidateWord>(
++                            this, symbol, candidate, isFull));
+                 }
+             }
+ 
+             maybeApplyExtraCandidates(false);
++            flushSymbols(false);
+         }
+ 
+         maybeApplyExtraCandidates(true);
++        flushSymbols(true);
+         candidateList->setSelectionKey(selectionKeys_);
+         if (!candidateList->empty()) {
+             candidateList->setGlobalCursorIndex(0);
+@@ -736,6 +862,38 @@ PinyinEngine::PinyinEngine(Instance *instance)
          }
      } while (0);
  
@@ -674,10 +912,26 @@ index bc19a12..56bf9f6 100644
 +        }
 +    } while (0);
 +
++    do {
++        auto file =
++            standardPath.open(StandardPathsType::PkgData, "pinyin/user.typed",
++                              StandardPathsMode::User);
++        if (!file.isValid()) {
++            break;
++        }
++        try {
++            IFDStreamBuf buffer(file.fd());
++            std::istream in(&buffer);
++            typedHistory_.load(in);
++        } catch (const std::exception &e) {
++            PINYIN_ERROR() << "Failed to load typed code history: " << e.what();
++        }
++    } while (0);
++
      ime_->setScoreFilter(1);
      loadBuiltInDict();
      reloadConfig();
-@@ -894,13 +944,13 @@ void PinyinEngine::loadExtraDict() {
+@@ -894,13 +1052,13 @@ void PinyinEngine::loadExtraDict() {
      auto files =
          standardPath.locate(StandardPathsType::PkgData, "pinyin/dictionaries",
                              pathfilter::extension(".dict"));
@@ -693,7 +947,7 @@ index bc19a12..56bf9f6 100644
      }
      FCITX_ASSERT(ime_->dict()->dictSize() >=
                   libime::TrieDictionary::UserDict + NumBuiltInDict + 1)
-@@ -909,7 +959,8 @@ void PinyinEngine::loadExtraDict() {
+@@ -909,7 +1067,8 @@ void PinyinEngine::loadExtraDict() {
      ime_->dict()->removeFrom(libime::TrieDictionary::UserDict + NumBuiltInDict +
                               1);
      for (auto &file : files) {
@@ -703,7 +957,17 @@ index bc19a12..56bf9f6 100644
              PINYIN_DEBUG() << "Dictionary: " << file.first << " is disabled.";
              continue;
          }
-@@ -1599,6 +1650,31 @@ void PinyinEngine::pinCustomPhrase(InputContext *inputContext,
+@@ -1547,6 +1706,9 @@ void PinyinEngine::forgetCandidate(InputContext *inputContext, size_t index) {
+ 
+     if (index < state->context_.candidatesToCursor().size()) {
+         const auto &sentence = state->context_.candidatesToCursor()[index];
++        typedHistory_.remove(std::string_view(currentInput)
++                                 .substr(state->context_.selectedLength()),
++                             sentence.toString());
+         // If this is a word, remove it from user dict.
+         if (sentence.size() == 1) {
+             auto py = state->context_.candidateFullPinyin(index);
+@@ -1599,6 +1761,43 @@ void PinyinEngine::pinCustomPhrase(InputContext *inputContext,
      saveCustomPhrase();
  }
  
@@ -720,10 +984,22 @@ index bc19a12..56bf9f6 100644
 +    state->undoEnglishWord_ = word;
 +}
 +
-+void PinyinEngine::forgetEnglishWord(InputContext *inputContext,
++void PinyinEngine::forgetLearnedWord(InputContext *inputContext,
 +                                     const std::string &word) {
 +    auto *state = inputContext->propertyFor(&factory_);
 +    englishWords_.remove(word);
++    typedHistory_.remove(std::string_view(state->context_.userInput())
++                             .substr(state->context_.selectedLength()),
++                         word);
++    // The pinyin candidate hidden behind it was learned from the same commits:
++    // forget that too, or it stays on top.
++    const auto &sentences = state->context_.candidatesToCursor();
++    for (size_t i = 0; i < sentences.size(); i++) {
++        if (sentences[i].toString() == word) {
++            forgetCandidate(inputContext, i);
++            return;
++        }
++    }
 +
 +    const std::string currentInput = state->context_.userInput();
 +    resetForgetCandidate(inputContext);
@@ -735,7 +1011,7 @@ index bc19a12..56bf9f6 100644
  void PinyinEngine::deleteCustomPhrase(InputContext *inputContext,
                                        const std::string &customPhrase) {
      auto *state = inputContext->propertyFor(&factory_);
-@@ -1916,6 +1992,15 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
+@@ -1916,6 +2115,24 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
          return;
      }
  
@@ -747,41 +1023,61 @@ index bc19a12..56bf9f6 100644
 +            englishWords_.unlearn(word);
 +        }
 +    }
++    if (!state->undoTypedWord_.empty()) {
++        auto code = std::move(state->undoTypedCode_);
++        auto word = std::move(state->undoTypedWord_);
++        state->undoTypedCode_.clear();
++        state->undoTypedWord_.clear();
++        if (event.key().check(FcitxKey_BackSpace) && state->context_.empty()) {
++            typedHistory_.unlearn(code, word);
++        }
++    }
 +
      if (handlePuncCandidate(event)) {
          return;
      }
-@@ -2116,6 +2201,9 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
+@@ -2116,6 +2333,16 @@ void PinyinEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &event) {
              event.filterAndAccept();
          } else if (event.key().checkKeyList(*config_.commitRawInput)) {
              inputContext->commitString(preeditCommitString(inputContext));
 +            learnEnglishWord(inputContext,
 +                             state->context_.userInput().substr(
 +                                 state->context_.selectedLength()));
++            if (!state->undoEnglishWord_.empty() &&
++                state->context_.selectedLength() == 0) {
++                typedHistory_.learn(state->undoEnglishWord_,
++                                    state->undoEnglishWord_);
++                state->undoTypedCode_ = state->undoEnglishWord_;
++                state->undoTypedWord_ = state->undoEnglishWord_;
++            }
              state->context_.clear();
              event.filterAndAccept();
          } else if (int idx =
-@@ -2194,9 +2282,11 @@ void PinyinEngine::setSubConfig(const std::string &path,
+@@ -2194,9 +2421,13 @@ void PinyinEngine::setSubConfig(const std::string &path,
          loadExtraDict();
      } else if (path == "clearuserdict") {
          ime_->dict()->clear(libime::PinyinDictionary::UserDict);
 +        englishWords_.clear();
++        typedHistory_.clear();
      } else if (path == "clearalldict") {
          ime_->dict()->clear(libime::PinyinDictionary::UserDict);
          ime_->model()->history().clear();
 +        englishWords_.clear();
++        typedHistory_.clear();
      } else if (path == "customphrase") {
          loadCustomPhrase();
      }
-@@ -2215,6 +2305,7 @@ void PinyinEngine::doReset(InputContext *inputContext) const {
+@@ -2215,6 +2446,9 @@ void PinyinEngine::doReset(InputContext *inputContext) const {
      state->mode_ = PinyinMode::Normal;
      state->context_.clear();
      state->predictWords_.reset();
 +    state->undoEnglishWord_.clear();
++    state->undoTypedCode_.clear();
++    state->undoTypedWord_.clear();
      inputContext->inputPanel().reset();
      inputContext->updatePreedit();
      inputContext->updateUserInterface(UserInterfaceComponent::InputPanel);
-@@ -2253,6 +2344,27 @@ void PinyinEngine::save() {
+@@ -2253,6 +2487,129 @@ void PinyinEngine::save() {
                  return false;
              }
          });
@@ -790,6 +1086,13 @@ index bc19a12..56bf9f6 100644
 +                              OFDStreamBuf buffer(fd);
 +                              std::ostream out(&buffer);
 +                              englishWords_.save(out);
++                              return static_cast<bool>(out);
++                          });
++    standardPath.safeSave(StandardPathsType::PkgData, "pinyin/user.typed",
++                          [this](int fd) {
++                              OFDStreamBuf buffer(fd);
++                              std::ostream out(&buffer);
++                              typedHistory_.save(out);
 +                              return static_cast<bool>(out);
 +                          });
 +}
@@ -806,23 +1109,132 @@ index bc19a12..56bf9f6 100644
 +std::string PinyinEngine::exportGooglePinyinWords() {
 +    return googlepinyin::toTsv(
 +        googlepinyin::readUserWords(*ime_->dict(), &ime_->model()->history()));
++}
++
++std::string
++PinyinEngine::importGooglePinyinLearned(const std::string &typed,
++                                        const std::string &english) {
++    auto parseCount = [](const std::string &s) -> uint32_t {
++        try {
++            return static_cast<uint32_t>(
++                std::min<unsigned long>(std::stoul(s), 0xffffff));
++        } catch (...) {
++            return 0;
++        }
++    };
++    // Imported entries were not committed here: stamp 0, no boost as recent
++    // commits. load() keeps the larger count of an entry already there.
++    size_t typedAdded = 0;
++    std::stringstream table;
++    typedHistory_.save(table);
++    for (const auto &line : stringutils::split(typed, "\n")) {
++        auto f = stringutils::split(line, "\t");
++        if (f.size() < 3) {
++            continue;
++        }
++        const auto count = parseCount(f[2]);
++        if (count == 0 ||
++            !TypedCodeHistory::isValid(TypedCodeHistory::key(f[0]), f[1])) {
++            continue;
++        }
++        table << f[0] << '\t' << f[1] << '\t' << count << "\t0\n";
++        typedAdded++;
++    }
++    typedHistory_.load(table);
++
++    // Learned English words, lines of word<TAB>count<TAB>stamp, by lowercase
++    // word; imported words count as used just now, the larger count wins.
++    struct English {
++        std::string word;
++        uint32_t count;
++        uint64_t stamp;
++    };
++    std::vector<English> words;
++    std::unordered_map<std::string, size_t> index;
++    uint64_t stamp = 0;
++    std::stringstream saved;
++    englishWords_.save(saved);
++    std::string line;
++    while (std::getline(saved, line)) {
++        auto f = stringutils::split(line, "\t");
++        if (f.size() < 3) {
++            continue;
++        }
++        English w{f[0], parseCount(f[1]), 0};
++        try {
++            w.stamp = std::stoull(f[2]);
++        } catch (...) {
++        }
++        stamp = std::max(stamp, w.stamp);
++        index[EnglishUserWords::normalize(w.word)] = words.size();
++        words.push_back(std::move(w));
++    }
++    size_t englishAdded = 0;
++    for (const auto &line : stringutils::split(english, "\n")) {
++        auto f = stringutils::split(line, "\t");
++        if (f.size() < 2 || !EnglishUserWords::isLearnable(f[0])) {
++            continue;
++        }
++        const auto count =
++            std::min<uint32_t>(parseCount(f[1]), EnglishUserWords::MaxCount);
++        if (count == 0) {
++            continue;
++        }
++        englishAdded++;
++        auto key = EnglishUserWords::normalize(f[0]);
++        if (auto iter = index.find(key); iter != index.end()) {
++            words[iter->second].count =
++                std::max(words[iter->second].count, count);
++            continue;
++        }
++        index[key] = words.size();
++        words.push_back({f[0], count, ++stamp});
++    }
++    std::stringstream merged;
++    for (const auto &w : words) {
++        merged << w.word << '\t' << w.count << '\t' << w.stamp << '\n';
++    }
++    englishWords_.load(merged);
++
++    save();
++    return std::to_string(typedAdded) + " " + std::to_string(englishAdded);
++}
++
++std::string PinyinEngine::exportLearnedEnglish() {
++    std::stringstream out;
++    englishWords_.save(out);
++    return out.str();
  }
  
  std::string PinyinEngine::subMode(const InputMethodEntry &entry,
 diff --git a/im/pinyin/pinyin.h b/im/pinyin/pinyin.h
-index c6e34a1..49b5263 100644
+index c6e34a1..0ee942f 100644
 --- a/im/pinyin/pinyin.h
 +++ b/im/pinyin/pinyin.h
-@@ -8,6 +8,8 @@
+@@ -8,7 +8,10 @@
  #define _PINYIN_PINYIN_H_
  
  #include "customphrase.h"
 +#include "englishuserwords.h"
 +#include "googlepinyin_public.h"
  #include "symboldictionary.h"
++#include "typedcodehistory.h"
  #include "workerthread.h"
  #include <cstddef>
-@@ -370,6 +372,10 @@ public:
+ #include <cstdint>
+@@ -323,8 +326,10 @@ FCITX_CONFIGURATION(
+         _("Key to trigger quickphrase"),
+         Key{FcitxKey_semicolon},
+         {KeyConstrainFlag::AllowModifierLess}};
++    // Off like Google Pinyin, where words starting with v (vpn, vip, vivo)
++    // are typed like any other.
+     Option<bool> useVAsQuickphrase{this, "VAsQuickphrase",
+-                                   _("Use V to trigger quickphrase"), true};
++                                   _("Use V to trigger quickphrase"), false};
+     ExternalOption quickphrase{this, "QuickPhrase", _("Quick Phrase"),
+                                "fcitx://config/addon/quickphrase/editor"};
+     OptionWithAnnotation<std::vector<std::string>, ToolTipAnnotation>
+@@ -370,6 +375,15 @@ public:
      int keyReleased_ = -1;
      int keyReleasedIndex_ = -2;
      uint64_t lastKeyPressedTime_ = 0;
@@ -830,45 +1242,56 @@ index c6e34a1..49b5263 100644
 +    // An English word was just committed and learned; a BackSpace as the very
 +    // next key undoes it.
 +    std::string undoEnglishWord_;
++
++    // What was just committed for what input, recorded in TypedCodeHistory;
++    // a BackSpace as the very next key undoes it.
++    std::string undoTypedCode_;
++    std::string undoTypedWord_;
  };
  
  class PinyinEngine final : public InputMethodEngineV3,
-@@ -420,6 +426,8 @@ public:
+@@ -420,6 +434,8 @@ public:
      void forgetCandidate(InputContext *inputContext, size_t index);
      void pinCustomPhrase(InputContext *inputContext,
                           const std::string &customPhrase);
 +    void learnEnglishWord(InputContext *inputContext, const std::string &word);
-+    void forgetEnglishWord(InputContext *inputContext, const std::string &word);
++    void forgetLearnedWord(InputContext *inputContext, const std::string &word);
      void deleteCustomPhrase(InputContext *inputContext,
                              const std::string &customPhrase);
  
-@@ -427,7 +435,13 @@ public:
+@@ -427,7 +443,18 @@ public:
  
      const auto &selectionKeys() const { return selectionKeys_; }
  
 +    std::string importGooglePinyinWords(const std::string &tsv);
 +    std::string exportGooglePinyinWords();
++    std::string importGooglePinyinLearned(const std::string &typed,
++                                          const std::string &english);
++    std::string exportLearnedEnglish();
 +
  private:
 +    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, importGooglePinyinWords);
 +    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, exportGooglePinyinWords);
++    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, importGooglePinyinLearned);
++    FCITX_ADDON_EXPORT_FUNCTION(PinyinEngine, exportLearnedEnglish);
 +
      void cloudPinyinSelected(InputContext *inputContext,
                               const std::string &selected,
                               const std::string &word);
-@@ -489,6 +503,7 @@ private:
+@@ -489,6 +516,8 @@ private:
      std::unique_ptr<EventSource> deferredPreload_;
      std::unique_ptr<HandlerTableEntry<EventHandler>> event_;
      CustomPhraseDict customPhrase_;
 +    EnglishUserWords englishWords_;
++    TypedCodeHistory typedHistory_;
      SymbolDict symbols_;
      WorkerThread worker_;
      std::list<std::unique_ptr<TaskToken>> persistentTask_;
 diff --git a/im/pinyin/pinyincandidate.cpp b/im/pinyin/pinyincandidate.cpp
-index ea289a1..52a44d3 100644
+index ea289a1..a71a31a 100644
 --- a/im/pinyin/pinyincandidate.cpp
 +++ b/im/pinyin/pinyincandidate.cpp
-@@ -284,6 +284,22 @@ void SpellCandidateWord::select(InputContext *inputContext) const {
+@@ -284,6 +284,29 @@ void SpellCandidateWord::select(InputContext *inputContext) const {
      engine_->updateUI(inputContext);
  }
  
@@ -888,25 +1311,36 @@ index ea289a1..52a44d3 100644
 +    }
 +}
 +
++TypedHistoryCandidateWord::TypedHistoryCandidateWord(PinyinEngine *engine,
++                                                     std::string word,
++                                                     size_t inputLength,
++                                                     int order)
++    : SpellCandidateWord(engine, word, inputLength, order),
++      word_(std::move(word)) {}
++
  PinyinCandidateWord::PinyinCandidateWord(PinyinEngine *engine,
                                           InputContext *inputContext, Text text,
                                           size_t idx)
-@@ -415,6 +431,10 @@ void PinyinActionableCandidateList::triggerAction(
+@@ -415,6 +438,14 @@ void PinyinActionableCandidateList::triggerAction(
                      &candidate)) {
              engine_->forgetCandidate(inputContext_,
                                       pinyinCandidate->candidateIndex());
 +        } else if (const auto *englishCandidate =
 +                       dynamic_cast<const LearnedEnglishCandidateWord *>(
 +                           &candidate)) {
-+            engine_->forgetEnglishWord(inputContext_, englishCandidate->word());
++            engine_->forgetLearnedWord(inputContext_, englishCandidate->word());
++        } else if (const auto *typedCandidate =
++                       dynamic_cast<const TypedHistoryCandidateWord *>(
++                           &candidate)) {
++            engine_->forgetLearnedWord(inputContext_, typedCandidate->word());
          }
      } break;
      case PINYIN_CUSTOMPHRASE: {
 diff --git a/im/pinyin/pinyincandidate.h b/im/pinyin/pinyincandidate.h
-index aca7b01..b880b99 100644
+index aca7b01..5b8150e 100644
 --- a/im/pinyin/pinyincandidate.h
 +++ b/im/pinyin/pinyincandidate.h
-@@ -214,6 +214,21 @@ private:
+@@ -214,6 +214,33 @@ private:
      size_t inputLength_;
  };
  
@@ -925,17 +1359,327 @@ index aca7b01..b880b99 100644
 +    std::string word_;
 +};
 +
++// A word committed before for exactly this input, see TypedCodeHistory.
++class TypedHistoryCandidateWord : public SpellCandidateWord {
++public:
++    TypedHistoryCandidateWord(PinyinEngine *engine, std::string word,
++                              size_t inputLength, int order);
++
++    const std::string &word() const { return word_; }
++
++private:
++    std::string word_;
++};
++
  class PinyinCandidateWord : public CandidateWord,
                              public InsertableAsCustomPhraseInterface,
                              public ForgettableCandidateInterface {
-@@ -275,7 +290,9 @@ public:
+@@ -275,7 +302,10 @@ public:
  
  private:
      static bool isForgettable(const CandidateWord &candidate) {
 -        return dynamic_cast<const ForgettableCandidateInterface *>(&candidate);
 +        return dynamic_cast<const ForgettableCandidateInterface *>(
 +                   &candidate) ||
-+               dynamic_cast<const LearnedEnglishCandidateWord *>(&candidate);
++               dynamic_cast<const LearnedEnglishCandidateWord *>(&candidate) ||
++               dynamic_cast<const TypedHistoryCandidateWord *>(&candidate);
      }
  
      static bool canBeInsertedAsCustomPhrase(const CandidateWord &candidate) {
+diff --git a/im/pinyin/typedcodehistory.h b/im/pinyin/typedcodehistory.h
+new file mode 100644
+index 0000000..d90ada9
+--- /dev/null
++++ b/im/pinyin/typedcodehistory.h
+@@ -0,0 +1,291 @@
++/*
++ * SPDX-FileCopyrightText: 2026-2026 Fcitx5 for Android Contributors
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ */
++#ifndef _PINYIN_TYPEDCODEHISTORY_H_
++#define _PINYIN_TYPEDCODEHISTORY_H_
++
++#include <algorithm>
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++#include <istream>
++#include <ostream>
++#include <string>
++#include <string_view>
++#include <unordered_map>
++#include <utility>
++#include <vector>
++
++namespace fcitx {
++
++// What the user committed for exactly what they typed, and how often, like the
++// user dictionary of Google Pinyin: "xg" -> 香港 x907, 相关 x12. Unlike the
++// language model history, it keeps abbreviations apart ("y" -> 用 does not
++// make 用 come first for "yong"), and holds English and mixed words too.
++// Candidates for an input in this table come first, best Word::score first.
++class TypedCodeHistory {
++public:
++    static constexpr size_t MaxEntries = 60000;
++    static constexpr uint32_t MaxCount = 0xffffff;
++    // Words committed recently score higher, as if committed 10^RecentBoost
++    // times more, halving every RecentHalfLife commits (of any word), and the
++    // word committed last for a code 10^LastBoost times more still, halving
++    // every LastHalfLife commits. Tuned with
++    // scripts/typed-history-simulation.py of InsightKey on a real Google Pinyin
++    // user dictionary: when the user starts picking another word for a code, it
++    // comes first within a few commits, while words picked as often as before
++    // mostly keep their place.
++    static constexpr float RecentBoost = 3.0F;
++    static constexpr float RecentHalfLife = 5000.0F;
++    static constexpr float LastBoost = 2.0F;
++    static constexpr float LastHalfLife = 100.0F;
++
++    struct Word {
++        std::string word;
++        uint32_t count = 0;
++        // when last committed, 0 if never committed here (imported)
++        uint64_t stamp = 0;
++        // set by lookup(): log10(count), plus the boosts of recent commits
++        float score = 0;
++    };
++
++    // Letters typed, lowercase, without pinyin separators.
++    static std::string key(std::string_view input) {
++        std::string key;
++        key.reserve(input.size());
++        for (char c : input) {
++            if (c >= 'A' && c <= 'Z') {
++                key.push_back(static_cast<char>(c - 'A' + 'a'));
++            } else if (c >= 'a' && c <= 'z') {
++                key.push_back(c);
++            }
++        }
++        return key;
++    }
++
++    static bool isValid(std::string_view code, std::string_view word) {
++        return !code.empty() && code.size() <= 64 && !word.empty() &&
++               word.size() <= 256 &&
++               word.find_first_of("\t\n\r") == std::string_view::npos;
++    }
++
++    void learn(std::string_view input, std::string_view word,
++               uint32_t times = 1) {
++        auto code = key(input);
++        if (!isValid(code, word)) {
++            return;
++        }
++        auto &words = codes_[code];
++        auto iter = std::ranges::find_if(
++            words, [word](const Word &w) { return w.word == word; });
++        if (iter == words.end()) {
++            words.push_back({std::string(word), 0, 0});
++            iter = std::prev(words.end());
++            ++size_;
++        }
++        iter->count =
++            std::min<uint64_t>(uint64_t{iter->count} + times, MaxCount);
++        iter->stamp = ++clock_;
++        if (size_ > MaxEntries + MaxEntries / 10) {
++            evictOldest(MaxEntries);
++        }
++    }
++
++    // Undo one learn(), e.g. the commit was deleted right away.
++    void unlearn(std::string_view input, std::string_view word) {
++        auto iter = codes_.find(key(input));
++        if (iter == codes_.end()) {
++            return;
++        }
++        auto &words = iter->second;
++        auto w = std::ranges::find_if(
++            words, [word](const Word &w) { return w.word == word; });
++        if (w == words.end()) {
++            return;
++        }
++        if (w->count <= 1) {
++            words.erase(w);
++            --size_;
++            if (words.empty()) {
++                codes_.erase(iter);
++            }
++        } else {
++            --w->count;
++        }
++    }
++
++    void remove(std::string_view input, std::string_view word) {
++        auto iter = codes_.find(key(input));
++        if (iter == codes_.end()) {
++            return;
++        }
++        auto &words = iter->second;
++        auto removed = std::erase_if(
++            words, [word](const Word &w) { return w.word == word; });
++        size_ -= removed;
++        if (words.empty()) {
++            codes_.erase(iter);
++        }
++    }
++
++    void clear() {
++        codes_.clear();
++        size_ = 0;
++    }
++
++    bool empty() const { return codes_.empty(); }
++
++    // Words committed for input, best score (then most recent) first.
++    std::vector<Word> lookup(std::string_view input) const {
++        auto iter = codes_.find(key(input));
++        if (iter == codes_.end()) {
++            return {};
++        }
++        auto words = iter->second;
++        const auto last = std::ranges::max_element(
++            words, [](const Word &lhs, const Word &rhs) {
++                return lhs.stamp < rhs.stamp;
++            });
++        for (auto &w : words) {
++            w.score = std::log10(static_cast<float>(std::max(w.count, 1U)));
++            if (w.stamp == 0 || w.stamp > clock_) {
++                continue;
++            }
++            const auto age = static_cast<float>(clock_ - w.stamp);
++            w.score += RecentBoost * std::exp2(-age / RecentHalfLife);
++            if (&w == &*last) {
++                w.score += LastBoost * std::exp2(-age / LastHalfLife);
++            }
++        }
++        std::ranges::sort(words, [](const Word &lhs, const Word &rhs) {
++            if (lhs.score != rhs.score) {
++                return lhs.score > rhs.score;
++            }
++            return lhs.stamp > rhs.stamp;
++        });
++        return words;
++    }
++
++    // One entry per line: code<TAB>word<TAB>count<TAB>stamp
++    void load(std::istream &in) {
++        clear();
++        clock_ = 0;
++        std::string line;
++        while (std::getline(in, line)) {
++            size_t tabs[3];
++            size_t pos = 0;
++            bool ok = true;
++            for (auto &tab : tabs) {
++                tab = line.find('\t', pos);
++                if (tab == std::string::npos) {
++                    ok = false;
++                    break;
++                }
++                pos = tab + 1;
++            }
++            if (!ok) {
++                continue;
++            }
++            auto code = key(std::string_view(line).substr(0, tabs[0]));
++            auto word = line.substr(tabs[0] + 1, tabs[1] - tabs[0] - 1);
++            Word w;
++            try {
++                w.count = static_cast<uint32_t>(std::min<unsigned long>(
++                    std::stoul(line.substr(tabs[1] + 1, tabs[2] - tabs[1] - 1)),
++                    MaxCount));
++                w.stamp = std::stoull(line.substr(tabs[2] + 1));
++            } catch (...) {
++                continue;
++            }
++            if (w.count == 0 || !isValid(code, word)) {
++                continue;
++            }
++            w.word = std::move(word);
++            clock_ = std::max(clock_, w.stamp);
++            auto &words = codes_[code];
++            auto iter = std::ranges::find_if(
++                words, [&w](const Word &o) { return o.word == w.word; });
++            if (iter != words.end()) {
++                iter->count = std::max(iter->count, w.count);
++                iter->stamp = std::max(iter->stamp, w.stamp);
++                continue;
++            }
++            words.push_back(std::move(w));
++            ++size_;
++        }
++        if (size_ > MaxEntries) {
++            evictOldest(MaxEntries);
++        }
++    }
++
++    void save(std::ostream &out) const {
++        std::vector<std::pair<const std::string *, const Word *>> entries;
++        entries.reserve(size_);
++        for (const auto &[code, words] : codes_) {
++            for (const auto &w : words) {
++                entries.emplace_back(&code, &w);
++            }
++        }
++        std::ranges::sort(entries, [](const auto &lhs, const auto &rhs) {
++            return lhs.second->stamp < rhs.second->stamp;
++        });
++        for (const auto &[code, w] : entries) {
++            out << *code << '\t' << w->word << '\t' << w->count << '\t'
++                << w->stamp << '\n';
++        }
++    }
++
++private:
++    // Keep the keep most recent entries, less used first among never
++    // committed (imported) ones.
++    void evictOldest(size_t keep) {
++        using Age = std::pair<uint64_t, uint32_t>;
++        std::vector<Age> ages;
++        ages.reserve(size_);
++        for (const auto &[_, words] : codes_) {
++            for (const auto &w : words) {
++                ages.emplace_back(w.stamp, w.count);
++            }
++        }
++        if (ages.size() <= keep) {
++            return;
++        }
++        auto nth = ages.begin() + static_cast<long>(ages.size() - keep);
++        std::ranges::nth_element(ages, nth);
++        const Age minAge = *nth;
++        // of the entries as old as minAge, keep only as many as fit
++        auto ties = static_cast<size_t>(std::count(nth, ages.end(), minAge));
++        size_t tiesToKeep = ties;
++        size_ = 0;
++        for (auto iter = codes_.begin(); iter != codes_.end();) {
++            std::erase_if(iter->second, [&minAge, &tiesToKeep](const Word &w) {
++                const Age age{w.stamp, w.count};
++                if (age == minAge) {
++                    if (tiesToKeep == 0) {
++                        return true;
++                    }
++                    --tiesToKeep;
++                    return false;
++                }
++                return age < minAge;
++            });
++            size_ += iter->second.size();
++            if (iter->second.empty()) {
++                iter = codes_.erase(iter);
++            } else {
++                ++iter;
++            }
++        }
++    }
++
++    std::unordered_map<std::string, std::vector<Word>> codes_;
++    size_t size_ = 0;
++    uint64_t clock_ = 0;
++};
++
++} // namespace fcitx
++
++#endif // _PINYIN_TYPEDCODEHISTORY_H_

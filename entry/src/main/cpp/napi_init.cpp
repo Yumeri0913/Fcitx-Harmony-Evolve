@@ -229,6 +229,19 @@ API(exportGooglePinyinWords) {
     return ret;
 }
 
+API(importGooglePinyinLearned) {
+    GET_ARGS(2)
+    GET_STRING(typed, 0)
+    GET_STRING(english, 1)
+    STRING(ret, fcitx::importGooglePinyinLearned(typed, english))
+    return ret;
+}
+
+API(exportLearnedEnglish) {
+    STRING(ret, fcitx::exportLearnedEnglish())
+    return ret;
+}
+
 static void CallJs(napi_env env, napi_value jsCb, void *context, void *data) {
     if (env == nullptr) {
         return;
@@ -284,6 +297,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setEnabledInputMethods", nullptr, setEnabledInputMethods, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"importGooglePinyinWords", nullptr, importGooglePinyinWords, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"exportGooglePinyinWords", nullptr, exportGooglePinyinWords, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"importGooglePinyinLearned", nullptr, importGooglePinyinLearned, nullptr, nullptr, nullptr, napi_default,
+         nullptr},
+        {"exportLearnedEnglish", nullptr, exportLearnedEnglish, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setCurrentInputMethod", nullptr, setCurrentInputMethod, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"activateStatusAreaAction", nullptr, activateStatusAreaAction, nullptr, nullptr, nullptr, napi_default,
          nullptr}};

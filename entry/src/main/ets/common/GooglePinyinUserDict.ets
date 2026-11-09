@@ -36,10 +36,38 @@ export class Entry {
   }
 }
 
+// An English word of at least two letters, typed letter by letter, as fcitx pinyin learns it
+// from raw input (pinyin/user.english).
+export class EnglishEntry {
+  word: string
+  count: number
+
+  constructor(word: string, count: number) {
+    this.word = word
+    this.count = count
+  }
+}
+
+// What was typed for a word and how often, abbreviations ("xg" -> 香港), mixed ("appli" ->
+// app里) and English words included, as fcitx pinyin records commits (pinyin/user.typed).
+export class TypedEntry {
+  code: string
+  word: string
+  count: number
+
+  constructor(code: string, word: string, count: number) {
+    this.code = code
+    this.word = word
+    this.count = count
+  }
+}
+
 export interface ParseResult {
   entries: Entry[]
-  // Non-comment lines that could not be converted (English words, invalid pinyin...)
+  // Non-comment lines that could not be converted (invalid pinyin, mixed words...)
   skipped: number
+  english: EnglishEntry[]
+  typed: TypedEntry[]
 }
 
 // Full pinyin syllables accepted by libime without fuzzy flags.
@@ -71,6 +99,8 @@ const countRegex = /^[0-9]+,?$/
 const englishRegex = /^[A-Za-z]+(?:[-'][A-Za-z]+)*$/
 const languageMarkerRegex = /\\[0-9]+/
 const syllableSeparator = /[ '|]+/
+const englishCodeRegex = /^\\0((?: [a-z])+)$/
+const codeTokenRegex = /^(?:[a-zü]+|\\0|\\16)$/
 const hanRegex = /^[\p{Script=Han}〇]$/u
 
 function startsWith(bytes: Uint8Array, prefix: number[]): boolean {
@@ -197,13 +227,126 @@ function parseLine(line: string): Entry | null {
   return new Entry(w, syllables, count ?? 1)
 }
 
+function firstCount(fields: string[]): number | null {
+  for (const f of fields) {
+    if (countRegex.test(f)) {
+      const n = Number.parseInt(trimChars(f, ','))
+      return Number.isNaN(n) ? null : n
+    }
+  }
+  return null
+}
+
+function isCode(f: string): boolean {
+  return f.length > 0 && !countRegex.test(f) && /[a-z]/.test(f) &&
+    f.split(' ').every((t: string) => codeTokenRegex.test(t))
+}
+
+// The typed letters of any entry that was used: pinyin (full or abbreviated), English ("\0"
+// marker) or both ("\16" switches back to pinyin). Digits are left out.
+function parseTypedLine(line: string): TypedEntry | null {
+  const fields = splitFields(line).slice(0, 3).map((f: string) => f.trim())
+  const count = firstCount(fields)
+  if (count === null || count <= 0) {
+    return null
+  }
+  // An English word looks like a code too: prefer the one with a language marker, then the
+  // last one, which is where Google Pinyin writes it.
+  let codeIndex = -1
+  for (let i = fields.length - 1; i >= 0 && codeIndex < 0; i--) {
+    if (isCode(fields[i]) && fields[i].includes('\\')) {
+      codeIndex = i
+    }
+  }
+  for (let i = fields.length - 1; i >= 0 && codeIndex < 0; i--) {
+    if (isCode(fields[i])) {
+      codeIndex = i
+    }
+  }
+  if (codeIndex < 0) {
+    return null
+  }
+  const code = fields[codeIndex].split(' ')
+    .filter((t: string) => !t.startsWith('\\'))
+    .map(normalizeSyllable)
+    .join('')
+  let word: string | null = null
+  for (let i = 0; i < fields.length && word === null; i++) {
+    if (i !== codeIndex && fields[i].length > 0 && !countRegex.test(fields[i])) {
+      word = fields[i]
+    }
+  }
+  if (word === null || code.length === 0) {
+    return null
+  }
+  // Single letters (mostly typed in English mode) would push away pinyin abbreviations.
+  if (word.length === 1 && /[A-Za-z]/.test(word)) {
+    return null
+  }
+  return new TypedEntry(code, word, count)
+}
+
+// An English word of at least two letters; single letters are typed as raw input anyway.
+function parseEnglishLine(line: string): EnglishEntry | null {
+  const fields = splitFields(line).map((f: string) => f.trim())
+  let letters: string | null = null
+  for (const f of fields) {
+    const m = englishCodeRegex.exec(f)
+    if (m !== null) {
+      letters = m[1].replace(/ /g, '')
+      break
+    }
+  }
+  if (letters === null) {
+    return null
+  }
+  let word: string | null = null
+  for (const f of fields) {
+    if (f.toLowerCase() === letters) {
+      word = f
+      break
+    }
+  }
+  if (word === null || word.length < 2) {
+    return null
+  }
+  return new EnglishEntry(word, Math.max(1, firstCount(fields) ?? 1))
+}
+
 // Parse a Google Pinyin user dictionary (already decoded).
 export function parse(text: string): ParseResult {
   const merged = new Map<string, Entry>()
+  // by lowercase word, Google Pinyin may keep several spellings of one word
+  const english = new Map<string, EnglishEntry>()
+  const typed = new Map<string, TypedEntry>()
   let skipped = 0
   for (const raw of text.split('\n')) {
     const line = trimChars(raw, '﻿\r\n')
     if (line.trim().length === 0 || line.startsWith('#') || line.startsWith(';')) {
+      continue
+    }
+    const typedEntry = parseTypedLine(line)
+    if (typedEntry !== null) {
+      const key = `${typedEntry.code}\t${typedEntry.word}`
+      const old = typed.get(key)
+      if (old === undefined) {
+        typed.set(key, typedEntry)
+      } else {
+        old.count += typedEntry.count
+      }
+    }
+    const englishEntry = parseEnglishLine(line)
+    if (englishEntry !== null) {
+      const key = englishEntry.word.toLowerCase()
+      const old = english.get(key)
+      if (old === undefined) {
+        english.set(key, englishEntry)
+      } else if (englishEntry.count > old.count) {
+        // the most used spelling, with the counts of all
+        english.set(key, new EnglishEntry(englishEntry.word, englishEntry.count + old.count))
+      } else {
+        old.count += englishEntry.count
+      }
       continue
     }
     const entry = parseLine(line)
@@ -219,7 +362,35 @@ export function parse(text: string): ParseResult {
       old.count = Math.max(old.count, entry.count)
     }
   }
-  return { entries: Array.from(merged.values()), skipped: skipped }
+  return {
+    entries: Array.from(merged.values()),
+    skipped: skipped,
+    english: Array.from(english.values()),
+    typed: Array.from(typed.values()),
+  }
+}
+
+// Lines of "code\tword\tcount" and "word\tcount", as the native side expects.
+export function typedToTsv(typed: TypedEntry[]): string {
+  return typed.map((e: TypedEntry) => `${e.code}\t${e.word}\t${e.count}\n`).join('')
+}
+
+export function englishToTsv(english: EnglishEntry[]): string {
+  return english.map((e: EnglishEntry) => `${e.word}\t${e.count}\n`).join('')
+}
+
+// Learned English words of fcitx pinyin, lines of "word\tcount[\tstamp]".
+export function englishFromTsv(tsv: string): EnglishEntry[] {
+  const english: EnglishEntry[] = []
+  for (const line of tsv.split('\n')) {
+    const fields = line.split('\t')
+    if (fields.length < 2 || fields[0].length < 2) {
+      continue
+    }
+    const n = Number.parseInt(fields[1])
+    english.push(new EnglishEntry(fields[0], Number.isNaN(n) ? 1 : Math.max(1, n)))
+  }
+  return english
 }
 
 // Lines of "word\tpin'yin\tcount", as the native side expects.
@@ -241,10 +412,18 @@ export function fromTsv(tsv: string): Entry[] {
 }
 
 // Serialize entries to Google Pinyin user dictionary bytes (UTF-16LE with BOM).
-export function toGooglePinyinBytes(entries: Entry[]): Uint8Array {
+export function toGooglePinyinBytes(entries: Entry[], english: EnglishEntry[] = []): Uint8Array {
   let text = `${HEADER}\n`
   for (const e of entries) {
     text += `${e.word}\t${Math.max(1, e.count)}\t${e.googlePinyin}\n`
+  }
+  // English words like Google Pinyin writes them: hello\t3\t\0 h e l l o
+  for (const e of english) {
+    text += `${e.word}\t${Math.max(1, e.count)}\t\\0`
+    for (const c of e.word.toLowerCase()) {
+      text += ` ${c}`
+    }
+    text += '\n'
   }
   const bytes = new Uint8Array(2 + text.length * 2)
   bytes[0] = 0xFF
