@@ -11,7 +11,10 @@ export interface InputContextState {
   cursorPos: number
   accepted: boolean
 }
-export const processKey: (unicode: number, keyCode: number, isRelease: boolean) => InputContextState
+// alternatives: keys a touch may have meant with their natural log likelihood, "<keys>\t<score>,<score>..."
+// with the typed key first, or "".
+export const processKey: (unicode: number, keyCode: number, isRelease: boolean, alternatives: string) =>
+  InputContextState
 export const reset: () => InputContextState
 export const toggle: () => void
 export const selectCandidate: (index: number) => void

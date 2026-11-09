@@ -25,7 +25,10 @@ void init(const std::string &bundle, const std::string &resfile, const std::stri
 void focusIn(bool clientPreedit);
 void focusOut();
 InputContextState reset();
-InputContextState processKey(uint32_t unicode, int32_t keyCode, bool isRelease);
+// alternatives: keys a touch may have meant and their natural log likelihood,
+// "<keys>\t<score>,<score>..." with the typed key first, or empty.
+InputContextState processKey(uint32_t unicode, int32_t keyCode, bool isRelease,
+                             const std::string &alternatives = "");
 void selectCandidate(int index);
 void askCandidateAction(int index);
 void activateCandidateAction(int index, int id);

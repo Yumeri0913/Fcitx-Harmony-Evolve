@@ -43,11 +43,12 @@ API(toggle) {
 }
 
 API(processKey) {
-    GET_ARGS(3)
+    GET_ARGS(4)
     GET_U32(unicode, 0)
     GET_I32(keyCode, 1)
     GET_BOOL(isRelease, 2)
-    auto state = fcitx::processKey(unicode, keyCode, isRelease);
+    GET_STRING(alternatives, 3)
+    auto state = fcitx::processKey(unicode, keyCode, isRelease, alternatives);
     OBJECT(ret)
     SET(ret, "commit", state.commit)
     SET(ret, "preedit", state.preedit)

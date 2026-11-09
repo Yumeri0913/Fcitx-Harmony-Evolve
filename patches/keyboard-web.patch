@@ -40,10 +40,10 @@ index 0000000..1cb8fed
 +  lmdb: false
 +  msgpackr-extract: false
 diff --git a/src/api.d.ts b/src/api.d.ts
-index 23fc6d3..a2961aa 100644
+index 23fc6d3..7ee9071 100644
 --- a/src/api.d.ts
 +++ b/src/api.d.ts
-@@ -23,6 +23,29 @@ export interface CandidateAction {
+@@ -23,6 +23,32 @@ export interface CandidateAction {
    text: string
  }
  
@@ -62,6 +62,9 @@ index 23fc6d3..a2961aa 100644
 +  spaceSwipeMoveCursor?: boolean
 +  slideSensitivity?: number
 +  longPressDelay?: number
++  // Millimeters per CSS pixel, for the touch spatial model.
++  mmPerPxX?: number
++  mmPerPxY?: number
 +}
 +
 +export interface ClipboardEntry {
@@ -73,7 +76,7 @@ index 23fc6d3..a2961aa 100644
  export const SCROLL_NONE = 0
  export const SCROLL_READY = 1
  export const SCROLLING = 2
-@@ -62,6 +85,16 @@ export type SystemEvent = {
+@@ -62,6 +88,16 @@ export type SystemEvent = {
  } | {
    type: 'STATUS_AREA'
    data: StatusAreaAction[]
@@ -90,7 +93,15 @@ index 23fc6d3..a2961aa 100644
  } | {
    type: 'INPUT_METHODS'
    data: {
-@@ -81,10 +114,27 @@ export type VirtualKeyboardEvent = {
+@@ -75,16 +111,35 @@ export type VirtualKeyboardEvent = {
+   data: {
+     key: string
+     code: string
++    // Letter keys: keys the touch may have meant, see touchAlternatives in spatial.ts.
++    alternatives?: string
+   }
+ } | {
+   type: 'COMMIT' | 'SET_INPUT_METHOD'
    data: string
  } | {
    type: 'UNDO' | 'REDO' | 'CUT' | 'COPY' | 'PASTE' | 'COLLAPSE'
@@ -941,10 +952,10 @@ index 0000000..a019a2d
 +export const emoticonCategories: PickerCategory[] = [{ label: '(^_^)', items: [':D', ':)', ';)', ':-)', '^_^', '(^^)', '(^^♪', 'ʕ•ٹ•ʔ', '(^o^)', '(^^)/', '(^^)v', '(^_^)', '(・∀・)', '(^_-)', '(≧▽≦)', '(^。^)', '(^・^)', '(^ム^)', '(•ө•)♡', '(ㆁωㆁ*)', '(^_^)v', '(*^^*)', '(*´∀｀)', '( ´∀｀)', '(≧∇≦)b', '(*^^)v', '(^o^)v', '(^_^)/', '(^o^)／', '(*ﾟ∀ﾟ)', '(^o^)丿', '(^O^)v', '(^_^.)', '（ ・∀・）', '(๑´ڡ`๑)', '•̀.̫•́✧', '(´ڡ`ლ)', '(･ิω･ิ)', '(*´ڡ`●)', '❤(ӦｖӦ｡)', '(●´ϖ`●)', '＼(^o^)／', '(*´ω｀*)', '(*^_^*)', '(^o^)丿', '(^_-)-☆', '(*^。^*)', '(^。^)ノ', '(ﾉ´∀｀*)', '•̀ω•́ʔ✧', '( ･ิϖ･ิ)', '(♡ε♡ )۶', '(　･ิω･ิ)', '( ･ิω･ิ)', '(￣ー￣)ﾆﾔﾘ', '(^^)/~~~', '(๑´3｀๑)۶', '(@^^)/~~~', '(^.^)/~~~', '(๑•̀ㅁ•́๑)✧', '(๑•̀ㅂ•́)و✧', '(>ω<)', '(*˘︶˘*).｡.:*♡', '(｡>﹏<｡)', '(*>_<*)ﾉ', '(｡>﹏<｡)ﾉﾞ✧*。'] }, { label: '(-_-;)', items: ['^^;', '^_^;', '(^^ゞ', '(・・;', '(;_;', '(・・;)', '(*_*;', '(ーー;)', '(^o^;', '(゜o゜;', '(・。・;', '(^.^;', '(@@;)', '(¯―¯٥)', '(^_^;)', '(-_-;)', '(\'・ω・\')', '(°ー°〃)', '(ーー゛)', '(~_~;)', '(；´Д｀)', '(^o^;)', '(；・∀・)', '(；´∀｀)', '(-.-;)', '(・_・;)', '(＠_＠;)', '（；^ω^）', '(；一_一)', '(_ _;)', '(^O^;)', '(~O~;)', '(・.・;)', '(=o=;)', '(-_-;)', '(~_~;)', '(-.-;)', '(；一_一)', '(~O~;)', '(=o=;)', '(´∀｀；)', '(´-﹏-`；)', '(ㆀ˘･з･˘)', '(_ _;)m', '(_ _;)m', '( •̀ㅁ•́;)', '(； ･`д･´)'] }, { label: '(*_*)', items: [':-O', ':-|', '(゜゜)', '(@_@)', '(*_*)', '(+_+)', '(・o・)', '(゜o゜)', '(゜-゜)', '(?_?)', '(ﾟДﾟ)', '( ﾟдﾟ)', '＼(◎o◎)／', '(✽ ﾟдﾟ ✽)', '≡≡ﾍ( ´Д`)ﾉ'] }, { label: '(T_T)', items: ['(TT)', '(__)', '(;_;', '(´Д⊂ヽ', '(T_T)', '(;_;)', '(._.)', '(ToT)', '(_ _)', '(/_;)', '(:_;)', '(;O;)', '(TдT)', '(TOT)', '(;_:)', '|￣|○', '(_ _;)', '(¯―¯٥)', '(__)m', '(｡ŏ﹏ŏ)', '(ヽ´ω`)', '( ；∀；)', '(･ัω･ั)', '(_^_)_', '(._.)_', '(_ _)m', '(*´﹃｀*)', '(´・ω・`)', '(´・ω・｀)', '(´；ω；｀)', '(´д⊂)‥ﾊｩ', '( ･ั﹏･ั)', '(つд⊂)ｴｰﾝ', '(_ _;)m', '( ´Д｀)=3', '(ﾉД`)ｼｸｼｸ', '(๑´0`๑)۶', '(ToT)/~~~', '(;_;)/~~~', '(T_T)/~~~', '(´；ω；｀)ｳｯ…', '｡ﾟ(ﾟ´Д｀ﾟ)ﾟ｡', '(´；ω；｀)ﾌﾞﾜｯ', '(๑´•.̫ • `๑)', '(´ . .̫ . `)', '｡･ﾟ･(ﾉД`)･ﾟ･｡', '｡･ﾟ･(ﾉ∀`)･ﾟ･｡', '(´°̥̥̥̥̥̥̥̥ω°̥̥̥̥̥̥̥̥｀)'] }, { label: '(-_-)', items: [':(', ':|', ':-(', ':-P', '=_=', '(--)', '(｀´）', '(-_-)', '(-.-)', '(=_=)', '(︶^︶)', '→_→', '←_←', '(~o~)', '(~_~)', '(~O~)', '(ー_ー)', '( 一一)', '(・へ・)', '(ーー゛)', '(－－〆)', '(#･∀･)', '(-_-;)', '(~_~;)', '(-.-;)', '(=_=;)', '(~O~;)', '(=o=;)', '(-_-メ)', '(~_~メ)', '(^_^メ)', '(ー_ー;)', '(；一_一)', '((+_+))', '(# ﾟДﾟ)', '( ´Д｀)=3', '(๑`^´๑)۶', '(๑òωó๑)۶'] }, { label: '(･∀･)', items: ['(⌒▽⌒)', '（￣▽￣）', '(=・ω・=)', '(｀・ω・´)', '(〜￣△￣)〜', '(･∀･)', '(°∀°)ﾉ', '(￣3￣)', '╮(￣▽￣)╭', '_(:3」∠)_', '( ´_ゝ｀)', '←_←', '→_→', '(<_<)', '(>_>)', '(;¬_¬)', '("▔□▔)/', '(ﾟДﾟ≡ﾟдﾟ)!?', 'Σ(ﾟдﾟ;)', 'Σ( ￣□￣||)', '(´；ω；`)', '（/TДT)/', '(^・ω・^ )', '(｡･ω･｡)', '(●￣(ｴ)￣●)', 'ε=ε=(ノ≧∇≦)ノ', '(´･_･`)', '(-_-#)', '（￣へ￣）', '(￣ε(#￣) Σ', 'ヽ(`Д´)ﾉ', '（#-_-)┯━┯', '(╯°口°)╯(┴—┴', '←◡←', '( ♥д♥)', 'Σ>―(〃°ω°〃)♡→', '⁄(⁄ ⁄•⁄ω⁄•⁄ ⁄)⁄', '(╬ﾟдﾟ)▄︻┻┳═一', '･*･:≡(　ε:)', '¯\\_(ツ)_/¯'] }]
 diff --git a/src/googlepinyin.ts b/src/googlepinyin.ts
 new file mode 100644
-index 0000000..6848c1d
+index 0000000..8d1d267
 --- /dev/null
 +++ b/src/googlepinyin.ts
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,154 @@
 +import type { Key, Layout, LongPress, Row, Swipe } from './layout'
 +
 +// Google Pinyin 4.x look, ported from fcitx5-android TextKeyboard/NumberKeyboard
@@ -1063,26 +1074,34 @@ index 0000000..6848c1d
 +  return { type: 'key', label, key: label, code: `Numpad${label}`, flex }
 +}
 +
++// Digit keyboard symbols are committed as is.
 +function numPadSymbol(label: string, flex = '1.5'): Key {
-+  return { type: 'key', label, key: label, variant: 'alternative', flex }
++  return { type: 'key', label, key: label, variant: 'alternative', commit: true, flex }
 +}
 +
-+const digitFlex = (7 / 3).toFixed(4)
++// Digit keyboard: columns weigh 149/702/149, the
++// left one a scrollable panel of + - * / ( ) laid over placeholders (see renderNumberPanel).
++const sideFlex = '1.49'
++const digitFlex = '2.34'
 +
 +const numberRows: Row[] = [
-+  { keys: [numPadSymbol('+'), numPad('1', digitFlex), numPad('2', digitFlex), numPad('3', digitFlex), numPadSymbol('/')] },
-+  { keys: [numPadSymbol('-'), numPad('4', digitFlex), numPad('5', digitFlex), numPad('6', digitFlex), { type: 'key', label: '␣', key: ' ', code: 'Space', variant: 'alternative', flex: '1.5' }] },
-+  { keys: [numPadSymbol('*'), numPad('7', digitFlex), numPad('8', digitFlex), numPad('9', digitFlex), { type: 'backspace', flex: '1.5' }] },
++  { keys: [{ type: 'placeholder', flex: sideFlex }, numPad('1', digitFlex), numPad('2', digitFlex), numPad('3', digitFlex), numPadSymbol('#', sideFlex)] },
++  { keys: [{ type: 'placeholder', flex: sideFlex }, numPad('4', digitFlex), numPad('5', digitFlex), numPad('6', digitFlex), { type: 'key', label: '␣', key: ' ', code: 'Space', variant: 'alternative', flex: sideFlex }] },
++  { keys: [{ type: 'placeholder', flex: sideFlex }, numPad('7', digitFlex), numPad('8', digitFlex), numPad('9', digitFlex), { type: 'backspace', flex: sideFlex }] },
++  // Digit keyboard bottom row: 150/100/100/300/100/100/150.
 +  { keys: [
-+    { type: 'layer', label: 'ABC', layer: 'default', flex: '1.5' },
++    { type: 'layer', label: '返回', layer: 'default', flex: '1.5' },
 +    numPadSymbol(',', '1'),
-+    { type: 'symbol', label: '!?#', flex: '1.3333' },
-+    numPad('0', '2.3334'),
-+    { type: 'key', label: '=', key: '=', flex: '1.3333' },
++    { type: 'symbol', label: '@?#', flex: '1' },
++    numPad('0', '3'),
++    { type: 'key', label: '=', key: '=', commit: true, flex: '1' },
 +    numPadSymbol('.', '1'),
 +    { type: 'enter', flex: '1.5' },
 +  ] },
 +]
++
++// Digit keyboard left panel, four shown at a time.
++export const numberPanelSymbols = ['+', '-', '*', '/', '(', ')']
 +
 +export const googlePinyinLayout: Layout = {
 +  layers: [
@@ -1092,7 +1111,7 @@ index 0000000..6848c1d
 +  ],
 +}
 diff --git a/src/key.ts b/src/key.ts
-index 8a28451..b2694e8 100644
+index 8a28451..9df914c 100644
 --- a/src/key.ts
 +++ b/src/key.ts
 @@ -1,11 +1,37 @@
@@ -1112,7 +1131,7 @@ index 8a28451..b2694e8 100644
 +import TagFaces from 'bundle-text:../svg/gp/tag-faces.svg'
  import { DATA_KEY, div, press } from './util'
 -import { getEnterKeyInnerHTML, getSpaceKeyLabel, setSpaceKeyLabel } from './ux'
-+import { getEnterKeyInnerHTML, getSpaceKeyLabel, isComposing, setSpaceKeyLabel, transformPunctuation } from './ux'
++import { getEnterKeyInnerHTML, getSpaceKeyLabel, isSeparator, setSpaceKeyLabel, transformPunctuation } from './ux'
 +
 +const keyIcons: Record<string, string> = {
 +  'number-pad': NumberPad,
@@ -1121,7 +1140,7 @@ index 8a28451..b2694e8 100644
 +
 +// Shift shows the pinyin syllable separator while composing, like fcitx5-android's TextKeyboard.
 +export function shiftKeyInnerHTML(context: Context) {
-+  if (isComposing()) {
++  if (isSeparator()) {
 +    return PinyinSeparator
 +  }
 +  if (context.layer === 'shift') {
@@ -1155,7 +1174,7 @@ index 8a28451..b2694e8 100644
 +        icon.innerHTML = TagFaces
 +        el.appendChild(icon)
 +      }
-+      renderLabel(el, label.length === 1 && !/\p{L}/u.test(label) ? transformPunctuation(label) : label)
++      renderLabel(el, !key.commit && label.length === 1 && !/\p{L}/u.test(label) ? transformPunctuation(label) : label)
        const { subLabel } = key
 -      if (subLabel) {
 -        const { topRight } = subLabel
@@ -1184,7 +1203,7 @@ index 8a28451..b2694e8 100644
        const el = div('fcitx-keyboard-key')
        el.classList.add('fcitx-keyboard-shift')
 -      if (context.layer === 'shift') {
-+      if (context.layer === 'shift' && !isComposing()) {
++      if (context.layer === 'shift' && !isSeparator()) {
          press(container)
        }
 -      el.innerHTML = context.layer === 'shift' ? (context.locked ? ShiftUppercaseFiled : ShiftFiled) : Shift
@@ -1216,10 +1235,10 @@ index 8a28451..b2694e8 100644
        container.setAttribute(DATA_KEY, dataKey)
        break
 diff --git a/src/keyboard.ts b/src/keyboard.ts
-index 9cbf8f1..d4ed60e 100644
+index 9cbf8f1..114b279 100644
 --- a/src/keyboard.ts
 +++ b/src/keyboard.ts
-@@ -1,20 +1,65 @@
+@@ -1,20 +1,67 @@
 -import type { SystemEvent } from './api'
 +import type { KeyboardConfig, SystemEvent } from './api'
  import type { BUILTIN_LAYOUT, Layout } from './layout'
@@ -1242,6 +1261,7 @@ index 9cbf8f1..d4ed60e 100644
 +import { enableRedo, enableUndo, renderToolbar, setCurrentInputMethod } from './toolbar'
  import { div, hide, isAndroidOrIOS, isFirefox } from './util'
 -import { onTouchEnd, onTouchMove, onTouchStart, setEnterKeyType, setInputMethods, setLayer, setLayout as setLayout_ } from './ux'
++import { setTouchScale } from './spatial'
 +import { haptic, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, setComposing, setEnterKeyType, setInputMethods, setKeyBehavior, setLayer, setLayout as setLayout_, setPopupOnKeyPress, setPunctuation } from './ux'
 +
 +const builtInLayoutMap = { qwerty, googlepinyin: googlePinyinLayout } as { [key: string]: Layout }
@@ -1283,6 +1303,7 @@ index 9cbf8f1..d4ed60e 100644
 +  setPopupMetrics(config_.keyMarginY, config_.keyRadius)
 +  setPopupOnKeyPress(config_.popupOnKeyPress)
 +  setKeyBehavior(config_.slideSensitivity ?? 1, config_.longPressDelay ?? 300, config_.spaceSwipeMoveCursor ?? true)
++  setTouchScale(config_.mmPerPxX, config_.mmPerPxY)
 +}
 +
 +export function setConfig(config: KeyboardConfig) {
@@ -1292,7 +1313,7 @@ index 9cbf8f1..d4ed60e 100644
  
  export function setLayout(id: string, layout: Layout) {
    setLayout_(layout)
-@@ -25,6 +70,7 @@ export function setLayout(id: string, layout: Layout) {
+@@ -25,6 +72,7 @@ export function setLayout(id: string, layout: Layout) {
    const toolbar = renderToolbar()
    const candidateBar = renderCandidateBar()
    const returnBar = renderReturnBar()
@@ -1300,7 +1321,7 @@ index 9cbf8f1..d4ed60e 100644
  
    const keyboard = div('fcitx-keyboard')
    keyboard.classList.add('fcitx-keyboard-frame')
-@@ -36,7 +82,7 @@ export function setLayout(id: string, layout: Layout) {
+@@ -36,7 +84,7 @@ export function setLayout(id: string, layout: Layout) {
    mask.addEventListener('touchstart', onTouchStart)
    mask.addEventListener('touchmove', onTouchMove)
    mask.addEventListener('touchend', onTouchEnd)
@@ -1309,7 +1330,7 @@ index 9cbf8f1..d4ed60e 100644
  
    const editor = renderEditor()
    editor.classList.add('fcitx-keyboard-frame')
-@@ -44,8 +90,11 @@ export function setLayout(id: string, layout: Layout) {
+@@ -44,8 +92,11 @@ export function setLayout(id: string, layout: Layout) {
    const statusArea = renderStatusArea()
    statusArea.classList.add('fcitx-keyboard-frame')
  
@@ -1323,7 +1344,7 @@ index 9cbf8f1..d4ed60e 100644
  
    const contextmenu = renderContextmenu()
    hide(contextmenu)
-@@ -61,17 +110,25 @@ export function setLayout(id: string, layout: Layout) {
+@@ -61,17 +112,25 @@ export function setLayout(id: string, layout: Layout) {
      toolbar,
      candidateBar,
      returnBar,
@@ -1350,7 +1371,7 @@ index 9cbf8f1..d4ed60e 100644
    if (isAndroidOrIOS) {
      // Disable iOS Safari select text.
      // Ideally Android doesn't need this, but default behavior of touchstart will cause input blur.
-@@ -84,6 +141,7 @@ export function setLayout(id: string, layout: Layout) {
+@@ -84,6 +143,7 @@ export function setLayout(id: string, layout: Layout) {
    const app = document.getElementById(id)!
    app.innerHTML = ''
    app.appendChild(container)
@@ -1358,7 +1379,7 @@ index 9cbf8f1..d4ed60e 100644
    setDisplayMode('initial')
    if (isFirefox) {
      // Firefox is buggy if render synchronously.
-@@ -108,10 +166,15 @@ export function onMessage(message: string) {
+@@ -108,10 +168,15 @@ export function onMessage(message: string) {
        break
      case 'HIDE':
        setLayer('default', false)
@@ -1374,7 +1395,7 @@ index 9cbf8f1..d4ed60e 100644
        break
      case 'PREEDIT':
        setPreedit(event.data.auxUp, event.data.preedit, event.data.caret)
-@@ -127,6 +190,16 @@ export function onMessage(message: string) {
+@@ -127,6 +192,16 @@ export function onMessage(message: string) {
        break
      case 'INPUT_METHODS':
        setInputMethods(event.data.inputMethods, event.data.currentInputMethod)
@@ -1392,10 +1413,10 @@ index 9cbf8f1..d4ed60e 100644
      case 'SELECT':
        return select()
 diff --git a/src/layout.d.ts b/src/layout.d.ts
-index baaf3dd..89e9e0f 100644
+index baaf3dd..fd0148d 100644
 --- a/src/layout.d.ts
 +++ b/src/layout.d.ts
-@@ -22,10 +22,17 @@ export interface NormalKey {
+@@ -22,10 +22,20 @@ export interface NormalKey {
    key?: string
    code?: string
    subLabel?: {
@@ -1407,6 +1428,9 @@ index baaf3dd..89e9e0f 100644
    swipeUp?: Swipe
 +  swipeDown?: Swipe
    longPress?: LongPress
++  // Digit keyboard symbols: committed as is, never turned into full
++  // width punctuation by the input method.
++  commit?: boolean
 +  // Function key look for punctuation such as comma and period.
 +  variant?: 'alternative'
 +  // Long press shows emoji, quick phrase and unicode, like fcitx5-android's comma key.
@@ -1414,7 +1438,7 @@ index baaf3dd..89e9e0f 100644
  }
  
  export interface ShiftKey {
-@@ -46,6 +53,24 @@ export interface EnterKey {
+@@ -46,6 +56,24 @@ export interface EnterKey {
  
  export interface SymbolKey {
    type: 'symbol'
@@ -1439,7 +1463,7 @@ index baaf3dd..89e9e0f 100644
  }
  
  export interface GlobeKey {
-@@ -60,7 +85,9 @@ export type Key = {
+@@ -60,7 +88,9 @@ export type Key = {
    | ShiftKey
    | SpaceKey
    | GlobeKey
@@ -1450,7 +1474,7 @@ index baaf3dd..89e9e0f 100644
      type: 'placeholder'
    })
  
-@@ -77,7 +104,7 @@ export interface Layout {
+@@ -77,7 +107,7 @@ export interface Layout {
    layers: Layer[]
  }
  
@@ -1461,7 +1485,7 @@ index baaf3dd..89e9e0f 100644
    layer: string
 diff --git a/src/picker.ts b/src/picker.ts
 new file mode 100644
-index 0000000..d0d5440
+index 0000000..ebc52bf
 --- /dev/null
 +++ b/src/picker.ts
 @@ -0,0 +1,362 @@
@@ -1757,7 +1781,7 @@ index 0000000..d0d5440
 +    ? { type: 'layer', label: '', layer: 'number', icon: 'number-pad' }
 +    : { type: 'picker', label: kind === 'emoji' ? ':-)' : '', picker: kind === 'emoji' ? 'emoticon' : 'emoji', icon: kind === 'emoji' ? undefined : 'tag-faces' }
 +  return [
-+    { type: 'layer', label: 'ABC', layer: 'default', flex: '1.5' },
++    { type: 'layer', label: '返回', layer: 'default', flex: '1.5' },
 +    { type: 'key', label: ',', key: ',', code: 'Comma', variant: 'alternative' },
 +    { ...switchKey, flex: '1' },
 +    { type: 'space', flex: '4' },
@@ -2118,7 +2142,7 @@ index 89dbb48..f37c42d 100644
 +  }
  }
 diff --git a/src/preset.css b/src/preset.css
-index 28b57c8..692bd10 100644
+index 28b57c8..b4886f2 100644
 --- a/src/preset.css
 +++ b/src/preset.css
 @@ -1,153 +1,259 @@
@@ -2134,13 +2158,6 @@ index 28b57c8..692bd10 100644
    font-family: sans-serif;
    container-type: size; /* for mask */
 -  color: black; /* not to be affected by host page color */
--}
--
--.fcitx-keyboard-return-bar {
--  height: 20%;
--  padding-left: 2%;
--  display: flex;
--  align-items: center;
 +  color: var(--fcitx-key-text); /* not to be affected by host page color */
 +  background-color: var(--fcitx-background);
 +
@@ -2218,14 +2235,21 @@ index 28b57c8..692bd10 100644
 +  display: none!important;
  }
  
--.fcitx-keyboard-editor {
--  display: grid;
--  grid-template-columns: repeat(8, 1fr);
--  grid-template-rows: repeat(4, 1fr);
+-.fcitx-keyboard-return-bar {
+-  height: 20%;
+-  padding-left: 2%;
+-  display: flex;
+-  align-items: center;
 +.fcitx-keyboard-container svg {
 +  display: block;
  }
  
+-.fcitx-keyboard-editor {
+-  display: grid;
+-  grid-template-columns: repeat(8, 1fr);
+-  grid-template-rows: repeat(4, 1fr);
+-}
+-
 -.fcitx-keyboard-editor-button-container {
 +/* Bars: fcitx5-android's 40 dp kawaii bar. Tool buttons are 40 dp with 20 dp icons. */
 +.fcitx-keyboard-toolbar,
@@ -2586,34 +2610,29 @@ index 28b57c8..692bd10 100644
 +.fcitx-keyboard-side-button-container {
 +  flex: 1;
 +  position: relative;
-   display: flex;
-   justify-content: center;
-+  align-items: center;
-+  color: var(--fcitx-alt-key-text);
- }
- 
--.fcitx-keyboard-candidate-inner {
--  padding: 7.5cqh 15cqh;
--  border-radius: 10cqh;
-+.fcitx-keyboard-side-button {
 +  display: flex;
 +  justify-content: center;
++  align-items: center;
++  color: var(--fcitx-alt-key-text);
++}
++
++.fcitx-keyboard-side-button {
+   display: flex;
+   justify-content: center;
 +  align-items: center;
 +  width: 40px;
 +  height: 40px;
 +  border-radius: 50%;
- }
- 
--.fcitx-keyboard-expanded .fcitx-keyboard-candidate {
--  min-width: 15cqw; /* At most 5 in a row. Not exact 80/5 to tolerate rounding issue. */
++}
++
 +.fcitx-keyboard-side-button svg {
 +  width: 24px;
 +  height: 24px;
  }
  
--.fcitx-keyboard-highlighted .fcitx-keyboard-candidate-inner {
--  background-color: white;
--  color: #0a59f7;
+-.fcitx-keyboard-candidate-inner {
+-  padding: 7.5cqh 15cqh;
+-  border-radius: 10cqh;
 +.fcitx-keyboard-candidates-enter .fcitx-keyboard-side-button {
 +  width: 35px;
 +  height: 35px;
@@ -2621,14 +2640,19 @@ index 28b57c8..692bd10 100644
 +  color: var(--fcitx-accent-key-text);
  }
  
+-.fcitx-keyboard-expanded .fcitx-keyboard-candidate {
+-  min-width: 15cqw; /* At most 5 in a row. Not exact 80/5 to tolerate rounding issue. */
 +.fcitx-keyboard-pressed:not(.fcitx-keyboard-disabled) .fcitx-keyboard-side-button {
 +  background-color: var(--fcitx-key-press);
-+}
-+
+ }
+ 
+-.fcitx-keyboard-highlighted .fcitx-keyboard-candidate-inner {
+-  background-color: white;
+-  color: #0a59f7;
 +.fcitx-keyboard-side-button-container.fcitx-keyboard-disabled {
 +  color: var(--fcitx-disabled);
-+}
-+
+ }
+ 
 +/* Keyboard: Google Pinyin's 6 dp top padding. Keys are drawn at the top of their cell with
 +   the whole vertical gap below them; the touch area is the whole cell. */
  .fcitx-keyboard {
@@ -2647,7 +2671,43 @@ index 28b57c8..692bd10 100644
    width: 100%;
  }
  
-@@ -244,201 +413,574 @@
+@@ -236,6 +405,35 @@
+   flex: 1;
+ }
+ 
++/* Digit keyboard left panel, laid over the placeholders of the first three
++   rows: four keys at a time, scrolled natively. */
++.fcitx-keyboard-number-panel {
++  pointer-events: none;
++}
++
++.fcitx-keyboard.fcitx-keyboard-hidden ~ .fcitx-keyboard-number-panel,
++.fcitx-keyboard-expanded .fcitx-keyboard-number-panel {
++  display: none;
++}
++
++.fcitx-keyboard-number-panel-scroller {
++  pointer-events: auto;
++  position: absolute;
++  left: 0;
++  top: 6px;
++  width: 14.9%;
++  height: calc((100% - 6px) * 0.75);
++  overflow-y: auto;
++  touch-action: pan-y;
++  scrollbar-width: none;
++}
++
++.fcitx-keyboard-number-panel-item {
++  position: relative;
++  height: 25%;
++  container-type: size;
++}
++
+ .fcitx-keyboard-key-container {
+   position: relative;
+   flex: 1;
+@@ -244,201 +442,574 @@
  
  .fcitx-keyboard-key {
    position: absolute;
@@ -2709,24 +2769,18 @@ index 28b57c8..692bd10 100644
  .fcitx-keyboard-pressed .fcitx-keyboard-key {
 -  background-color: #bcc0c7;
 +  background-image: linear-gradient(var(--fcitx-key-press), var(--fcitx-key-press));
- }
- 
--.fcitx-keyboard-key.fcitx-keyboard-shift svg {
--  height: 50%;
++}
++
 +.fcitx-keyboard-key svg {
 +  width: 24px;
 +  height: 24px;
- }
- 
--.fcitx-keyboard-key:is(.fcitx-keyboard-shift, .fcitx-keyboard-backspace, .fcitx-keyboard-enter, .fcitx-keyboard-symbol) {
--  background-color: #bcc0c7;
++}
++
 +.fcitx-keyboard-key:is(.fcitx-keyboard-shift, .fcitx-keyboard-backspace, .fcitx-keyboard-symbol, .fcitx-keyboard-layer, .fcitx-keyboard-alternative) {
 +  background-color: var(--fcitx-alt-key-background);
 +  color: var(--fcitx-alt-key-text);
- }
- 
--.fcitx-keyboard-pressed .fcitx-keyboard-key:is(.fcitx-keyboard-shift, .fcitx-keyboard-backspace, .fcitx-keyboard-enter, .fcitx-keyboard-symbol) {
--  background-color: white;
++}
++
 +/* ?123 and ABC: 16 dp bold. */
 +.fcitx-keyboard-key:is(.fcitx-keyboard-symbol, .fcitx-keyboard-layer) {
 +  font-size: 16px;
@@ -2736,17 +2790,13 @@ index 28b57c8..692bd10 100644
 +.fcitx-keyboard-key.fcitx-keyboard-enter {
 +  background-color: var(--fcitx-accent-key-background);
 +  color: var(--fcitx-accent-key-text);
- }
- 
--.fcitx-keyboard-key.fcitx-keyboard-backspace svg {
--  height: 60cqh;
++}
++
 +/* Space: the input method's name in 13 dp. */
 +.fcitx-keyboard-key.fcitx-keyboard-space {
 +  font-size: 13px;
- }
- 
--.fcitx-keyboard-key.fcitx-keyboard-enter svg {
--  height: 60cqh;
++}
++
 +.fcitx-keyboard-key.fcitx-keyboard-globe {
 +  color: var(--fcitx-alt-key-text);
 +}
@@ -2771,32 +2821,42 @@ index 28b57c8..692bd10 100644
 +
 +.fcitx-keyboard-borderless .fcitx-keyboard-pressed .fcitx-keyboard-key::before {
 +  background-color: var(--fcitx-key-press);
-+}
-+
+ }
+ 
+-.fcitx-keyboard-key.fcitx-keyboard-shift svg {
+-  height: 50%;
 +.fcitx-keyboard-borderless .fcitx-keyboard-key.fcitx-keyboard-space {
 +  --space-inset: max(0px, min(16px, calc((100cqh - 26px) / 2)));
 +
 +  inset: calc(var(--space-inset) - var(--fcitx-key-margin-y)) 10px calc(var(--space-inset) + var(--fcitx-key-margin-y));
 +  border-radius: 3px;
 +  background-color: var(--fcitx-space-bar)!important;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-key:is(.fcitx-keyboard-shift, .fcitx-keyboard-backspace, .fcitx-keyboard-enter, .fcitx-keyboard-symbol) {
+-  background-color: #bcc0c7;
 +.fcitx-keyboard-borderless .fcitx-keyboard-pressed .fcitx-keyboard-key.fcitx-keyboard-space {
 +  background-image: linear-gradient(var(--fcitx-key-press), var(--fcitx-key-press));
-+}
-+
+ }
+ 
+-.fcitx-keyboard-pressed .fcitx-keyboard-key:is(.fcitx-keyboard-shift, .fcitx-keyboard-backspace, .fcitx-keyboard-enter, .fcitx-keyboard-symbol) {
+-  background-color: white;
 +.fcitx-keyboard-borderless .fcitx-keyboard-key.fcitx-keyboard-space::before {
 +  display: none;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-key.fcitx-keyboard-backspace svg {
+-  height: 60cqh;
 +.fcitx-keyboard-borderless .fcitx-keyboard-key.fcitx-keyboard-enter {
 +  width: min(35px, 100cqh, 100cqw);
 +  height: min(35px, 100cqh, 100cqw);
 +  inset: calc((100cqh - min(35px, 100cqh, 100cqw)) / 2 - var(--fcitx-key-margin-y)) auto auto calc((100cqw - min(35px, 100cqh, 100cqw)) / 2);
 +  border-radius: 50%;
 +  background-color: var(--fcitx-accent-key-background)!important;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-key.fcitx-keyboard-enter svg {
+-  height: 60cqh;
 +.fcitx-keyboard-borderless .fcitx-keyboard-key.fcitx-keyboard-enter::before {
 +  display: none;
 +}
@@ -2835,14 +2895,12 @@ index 28b57c8..692bd10 100644
 +.fcitx-keyboard-editor-button-container {
 +  position: relative;
 +  container-type: size;
- }
- 
--.fcitx-keyboard-symbol-selector {
++}
++
 +.fcitx-keyboard-editor-button {
 +  position: absolute;
 +  inset: 4px;
-   display: flex;
--  font-size: 8cqh;
++  display: flex;
 +  justify-content: center;
 +  align-items: center;
 +  border-radius: 8px;
@@ -2881,15 +2939,17 @@ index 28b57c8..692bd10 100644
 +  display: flex;
 +  flex-direction: column;
 +  align-items: center;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-symbol-selector {
 +.fcitx-keyboard-status-area-circle {
 +  margin-top: 4px;
 +  width: 48px;
 +  height: 48px;
 +  border-radius: 50%;
 +  background-color: var(--fcitx-key-background);
-+  display: flex;
+   display: flex;
+-  font-size: 8cqh;
 +  justify-content: center;
 +  align-items: center;
 +  color: var(--fcitx-key-text);
@@ -2898,13 +2958,17 @@ index 28b57c8..692bd10 100644
 +.fcitx-keyboard-status-area-circle svg {
 +  width: 24px;
 +  height: 24px;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-symbol-categories {
+-  width: 20%;
 +.fcitx-keyboard-status-area-text-icon {
 +  font-size: 20px;
 +  font-weight: 600;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-symbol-category {
+-  height: 20%;
 +.fcitx-keyboard-status-area-circle.fcitx-keyboard-status-area-active {
 +  background-color: var(--fcitx-active-background);
 +  color: var(--fcitx-active-text);
@@ -2924,18 +2988,14 @@ index 28b57c8..692bd10 100644
 +
 +.fcitx-keyboard-status-area-container:active .fcitx-keyboard-status-area-circle {
 +  background-image: linear-gradient(var(--fcitx-key-press), var(--fcitx-key-press));
- }
- 
--.fcitx-keyboard-symbol-categories {
--  width: 20%;
++}
++
 +/* Symbol, emoji and emoticon pickers: fcitx5-android's PickerWindow. */
 +.fcitx-keyboard-picker-bar {
 +  overflow: auto hidden;
 +  scrollbar-width: none;
- }
- 
--.fcitx-keyboard-symbol-category {
--  height: 20%;
++}
++
 +.fcitx-keyboard-picker-tab {
 +  flex: 1 0 auto;
 +  min-width: 32px;
@@ -2946,13 +3006,16 @@ index 28b57c8..692bd10 100644
    align-items: center;
 +  color: var(--fcitx-key-text);
 +  opacity: 0.5;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-symbol-category.fcitx-keyboard-pressed {
+-  background-color: #bcc0c7;
 +.fcitx-keyboard-picker-tab svg {
 +  width: 20px;
 +  height: 20px;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-symbol-panel {
 +.fcitx-keyboard-picker-tab.fcitx-keyboard-picker-tab-text {
 +  font-size: 16px;
 +  white-space: nowrap;
@@ -2960,16 +3023,13 @@ index 28b57c8..692bd10 100644
 +
 +.fcitx-keyboard-picker-tab.fcitx-keyboard-picker-tab-active {
 +  opacity: 1;
- }
- 
--.fcitx-keyboard-symbol-category.fcitx-keyboard-pressed {
--  background-color: #bcc0c7;
++}
++
 +.fcitx-keyboard-picker {
 +  display: flex;
 +  flex-direction: column;
- }
- 
--.fcitx-keyboard-symbol-panel {
++}
++
 +.fcitx-keyboard-picker-pager {
    flex: 1;
    display: flex;
@@ -2990,11 +3050,8 @@ index 28b57c8..692bd10 100644
 +  scroll-snap-stop: always;
 +  display: flex;
 +  flex-direction: column;
- }
- 
--.fcitx-keyboard-symbol-item {
--  height: 20%;
--  flex: 0 0 20%;
++}
++
 +.fcitx-keyboard-picker-row {
 +  flex: 1;
 +  display: flex;
@@ -3002,8 +3059,11 @@ index 28b57c8..692bd10 100644
 +
 +.fcitx-keyboard-picker-row-last {
 +  justify-content: flex-end;
-+}
-+
+ }
+ 
+-.fcitx-keyboard-symbol-item {
+-  height: 20%;
+-  flex: 0 0 20%;
 +.fcitx-keyboard-picker-key {
 +  flex: none;
 +  box-sizing: border-box;
@@ -3012,12 +3072,14 @@ index 28b57c8..692bd10 100644
    align-items: center;
 +  overflow: hidden;
 +  color: var(--fcitx-key-text);
-+}
-+
+ }
+ 
+-.fcitx-keyboard-symbol-item:active {
+-  background-color: #bcc0c7;
 +.fcitx-keyboard-picker-key.fcitx-keyboard-pressed {
 +  background-color: var(--fcitx-key-press);
-+}
-+
+ }
+ 
 +.fcitx-keyboard-picker-key-label {
 +  white-space: nowrap;
 +}
@@ -3128,18 +3190,16 @@ index 28b57c8..692bd10 100644
 +.fcitx-keyboard-clipboard-pin svg {
 +  width: 12px;
 +  height: 12px;
- }
- 
--.fcitx-keyboard-symbol-item:active {
--  background-color: #bcc0c7;
++}
++
 +.fcitx-keyboard-clipboard-empty {
 +  flex: 1;
 +  padding: 24px 16px;
 +  font-size: 14px;
 +  text-align: center;
 +  color: var(--fcitx-key-text);
- }
- 
++}
++
 +/* Context menu: candidate actions, clipboard entries, input method list. */
  .fcitx-keyboard-contextmenu-container {
    position: absolute;
@@ -3289,22 +3349,22 @@ index 28b57c8..692bd10 100644
  
 -.fcitx-keyboard-pressed:not(.fcitx-keyboard-disabled) .fcitx-keyboard-side-button {
 -  background-color: white;
+-}
+-
+-.fcitx-keyboard-side-button-container.fcitx-keyboard-disabled svg {
+-  color: #7f7f7f;
 +.fcitx-keyboard-popup-menu-icon svg {
 +  width: 24px;
 +  height: 24px;
  }
  
--.fcitx-keyboard-side-button-container.fcitx-keyboard-disabled svg {
--  color: #7f7f7f;
+-.fcitx-keyboard-candidate-bar .fcitx-keyboard-toolbar-button svg {
+-  transform: rotate(270deg);
 +.fcitx-keyboard-highlighted .fcitx-keyboard-popup-menu-icon {
 +  background-color: var(--fcitx-accent-key-background);
 +  color: var(--fcitx-accent-key-text);
  }
  
--.fcitx-keyboard-candidate-bar .fcitx-keyboard-toolbar-button svg {
--  transform: rotate(270deg);
--}
--
 -.fcitx-keyboard-expanded .fcitx-keyboard-candidate-bar .fcitx-keyboard-toolbar-button svg {
 -  transform: rotate(90deg);
 +.fcitx-keyboard-invisible {
@@ -3343,6 +3403,120 @@ index 0cd7446..db8ea90 100644
 +  const slot = bar.querySelector('.fcitx-keyboard-return-bar-extension') as HTMLElement
 +  slot.innerHTML = ''
 +  slot.append(...extension)
++}
+diff --git a/src/spatial.ts b/src/spatial.ts
+new file mode 100644
+index 0000000..93e2ad0
+--- /dev/null
++++ b/src/spatial.ts
+@@ -0,0 +1,108 @@
++// Touch spatial model, the same one fcitx5-android uses for touch correction in
++// SpatialModel.kt: every letter key is a 2D Gaussian
++// centered on its rectangle, with a variance that grows with key size. For one touch, the touched
++// key and the nearby keys are scored by the log density at the touch point; the pinyin decoder
++// uses the scores to price keyboard corrections.
++//
++// One change from the plain model: the vertical variance grows at least with the key aspect ratio
++// (varY >= varX * (h / w)²), so a touch into the row above or below costs about as much as the
++// same miss into a left or right neighbor.
++
++interface Rect {
++  key: string
++  left: number
++  top: number
++  right: number
++  bottom: number
++}
++
++// Millimeters per CSS pixel, from the host (screen DPI); about 1/160 inch without it.
++let mmPerPxX = 25.4 / 160
++let mmPerPxY = 25.4 / 160
++
++export function setTouchScale(x?: number, y?: number) {
++  if (x && x > 0 && y && y > 0) {
++    mmPerPxX = x
++    mmPerPxY = y
++  }
++}
++
++const NEIGHBOR_FACTOR = 1.2
++
++function distanceTo(r: Rect, x: number, y: number) {
++  const dx = Math.max(r.left - x, 0, x - r.right)
++  const dy = Math.max(r.top - y, 0, y - r.bottom)
++  return Math.hypot(dx, dy)
++}
++
++function score(r: Rect, x: number, y: number) {
++  const w = (r.right - r.left) * mmPerPxX
++  const h = (r.bottom - r.top) * mmPerPxY
++  const varX = 0.0075 * (1.5 * w) ** 2 + 1.68
++  const varY = Math.max(0.0108 * (1.5 * h) ** 2 + 1.33, varX * (h / w) ** 2)
++  const dx = (x - (r.left + r.right) / 2) * mmPerPxX
++  const dy = (y - (r.top + r.bottom) / 2) * mmPerPxY
++  const norm = Math.log(1 / (2 * Math.PI * Math.sqrt(varX * varY)))
++  return norm - 0.5 * (dx * dx / varX + dy * dy / varY)
++}
++
++function mostCommon(values: number[]) {
++  const counts = new Map<number, number>()
++  for (const v of values) {
++    counts.set(Math.round(v), (counts.get(Math.round(v)) ?? 0) + 1)
++  }
++  let best = 0
++  let bestCount = 0
++  for (const [v, c] of counts) {
++    if (c > bestCount) {
++      best = v
++      bestCount = c
++    }
++  }
++  return best
++}
++
++// Letter keys on screen, from the key containers (their touch areas).
++function letterRects(): Rect[] {
++  const rects: Rect[] = []
++  for (const container of document.querySelectorAll('.fcitx-keyboard-key-container')) {
++    const data = container.getAttribute('data-key')
++    if (!data) {
++      continue
++    }
++    const key = JSON.parse(data) as { type?: string, key?: string }
++    const letter = key.key?.toLowerCase()
++    if (key.type !== 'key' || !letter || !/^[a-z]$/.test(letter)) {
++      continue
++    }
++    const b = container.getBoundingClientRect()
++    if (b.width > 0 && b.height > 0 && !rects.some(r => r.key === letter)) {
++      rects.push({ key: letter, left: b.left, top: b.top, right: b.right, bottom: b.bottom })
++    }
++  }
++  return rects
++}
++
++// Keys a touch at (x, y) on letter [touched] may have meant, as "<keys>\t<score>,<score>..." with
++// [touched] first, then neighbors whose rectangle is within the neighborhood radius of the touch
++// and whose center is within 1.2 radius of the touched key, best first. Empty if not a letter.
++export function touchAlternatives(touched: string, x: number, y: number): string {
++  const letter = touched.toLowerCase()
++  if (!/^[a-z]$/.test(letter)) {
++    return ''
++  }
++  const rects = letterRects()
++  const key = rects.find(r => r.key === letter)
++  if (!key) {
++    return ''
++  }
++  const radius = Math.min(mostCommon(rects.map(r => r.right - r.left)), mostCommon(rects.map(r => r.bottom - r.top)))
++  const neighbors = rects
++    .filter(r => r.key !== letter)
++    .filter(r => distanceTo(key, (r.left + r.right) / 2, (r.top + r.bottom) / 2) <= NEIGHBOR_FACTOR * radius)
++    .filter(r => distanceTo(r, x, y) <= radius)
++    .map(r => [r.key, score(r, x, y)] as [string, number])
++    .sort((a, b) => b[1] - a[1])
++  const all: [string, number][] = [[letter, score(key, x, y)], ...neighbors]
++  return `${all.map(a => a[0]).join('')}\t${all.map(a => a[1].toFixed(3)).join(',')}`
 +}
 diff --git a/src/statusArea.ts b/src/statusArea.ts
 index 88a9658..eebcc6d 100644
@@ -4125,10 +4299,10 @@ index 7797c26..d5d5fe1 100644
 +  '>': ['≥', '›', '»'],
  }
 diff --git a/src/toolbar.ts b/src/toolbar.ts
-index 4b77d0f..cd94b7d 100644
+index 4b77d0f..387e31d 100644
 --- a/src/toolbar.ts
 +++ b/src/toolbar.ts
-@@ -1,15 +1,22 @@
+@@ -1,15 +1,21 @@
 -import ChevronLeft from 'bundle-text:../svg/chevron-left.svg'
 -import Clipboard from 'bundle-text:../svg/clipboard.svg'
 -import CursorMove from 'bundle-text:../svg/cursor-move.svg'
@@ -4140,7 +4314,6 @@ index 4b77d0f..cd94b7d 100644
 +import Clipboard from 'bundle-text:../svg/gp/clipboard.svg'
 +import CursorMove from 'bundle-text:../svg/gp/cursor-move.svg'
 +import More from 'bundle-text:../svg/gp/more-horiz.svg'
-+import Palette from 'bundle-text:../svg/gp/palette.svg'
 +import Redo from 'bundle-text:../svg/gp/redo.svg'
 +import Undo from 'bundle-text:../svg/gp/undo.svg'
 +import { getDisplayMode, setDisplayMode } from './display'
@@ -4158,7 +4331,7 @@ index 4b77d0f..cd94b7d 100644
  let redoButton: HTMLElement | null = null
  
  export function enableUndo(enabled: boolean) {
-@@ -24,6 +31,27 @@ export function enableRedo(enabled: boolean) {
+@@ -24,6 +30,27 @@ export function enableRedo(enabled: boolean) {
      enabled ? enable(redoButton) : disable(redoButton)
  }
  
@@ -4186,7 +4359,7 @@ index 4b77d0f..cd94b7d 100644
  function renderDisableButton(icon: string, enabled: () => boolean) {
    const button = div('fcitx-keyboard-toolbar-button')
    button.innerHTML = icon
-@@ -37,28 +65,35 @@ function renderDisableButton(icon: string, enabled: () => boolean) {
+@@ -37,28 +64,31 @@ function renderDisableButton(icon: string, enabled: () => boolean) {
  
  export function renderToolbar() {
    const toolbar = div('fcitx-keyboard-toolbar')
@@ -4205,17 +4378,13 @@ index 4b77d0f..cd94b7d 100644
  
    const clipboardButton = renderToolbarButton(Clipboard)
 +  handleClick(clipboardButton, () => setDisplayMode(getDisplayMode() === 'clipboard' ? 'initial' : 'clipboard'))
-+
-+  // Quick entry to the theme settings, like the fork's palette button.
-+  const themeButton = renderToolbarButton(Palette)
-+  handleClick(themeButton, () => sendEvent({ type: 'OPEN_SETTINGS', data: 'keyboard' }))
  
 -  const statusAreaButton = renderToolbarButton(Ellipsis)
 +  const statusAreaButton = renderToolbarButton(More)
    handleClick(statusAreaButton, () => setDisplayMode('statusArea'))
  
 -  const collapseButton = renderToolbarButton(ChevronLeft)
-+  for (const button of [renderLanguageButton(), undoButton, redoButton, editButton, clipboardButton, themeButton, statusAreaButton]) {
++  for (const button of [renderLanguageButton(), undoButton, redoButton, editButton, clipboardButton, statusAreaButton]) {
 +    buttons.appendChild(button)
 +  }
 +
@@ -4244,10 +4413,10 @@ index 363a40c..d05cd19 100644
 +  return navigator.language.startsWith('zh') ? zh : en
 +}
 diff --git a/src/ux.ts b/src/ux.ts
-index 892f0e9..391f324 100644
+index 892f0e9..bfaad97 100644
 --- a/src/ux.ts
 +++ b/src/ux.ts
-@@ -3,16 +3,20 @@ import type { InputMethod, VirtualKeyboardClient, VirtualKeyboardEvent } from '.
+@@ -3,16 +3,22 @@ import type { InputMethod, VirtualKeyboardClient, VirtualKeyboardEvent } from '.
  import ArrowLeft from 'bundle-text:../svg/arrow-left.svg'
  import ArrowRight from 'bundle-text:../svg/arrow-right.svg'
  import CheckMark from 'bundle-text:../svg/checkmark.svg'
@@ -4266,6 +4435,8 @@ index 892f0e9..391f324 100644
 +import { renderRow, shiftKeyInnerHTML } from './key'
 +import { switchPicker } from './picker'
 +import { cancelHidePopover, hidePopover, showPopover, showPopupKeyboard, showPopupMenu, updatePopupFocus } from './popover'
++import { numberPanelSymbols } from './googlepinyin'
++import { touchAlternatives } from './spatial'
  import { getContainer, getKey, press, release } from './util'
  
 -type TouchState = 'HIT' | 'PRESSING' | 'SWIPING' | 'DOWN' | 'INTERRUPTED'
@@ -4273,7 +4444,7 @@ index 892f0e9..391f324 100644
  
  let layout_: Layout
  let currentLayer = 'default'
-@@ -24,25 +28,95 @@ let keyPressedWithShiftPressed = false
+@@ -24,25 +30,103 @@ let keyPressedWithShiftPressed = false
  let enterKeyType = ''
  let spaceKeyLabel = ''
  let inputMethods_: InputMethod[] = []
@@ -4289,6 +4460,12 @@ index 892f0e9..391f324 100644
 +  return composing
 +}
 +
++// Whether shift types the syllable separator: while composing, unless caps is locked, as
++// English is being typed then.
++export function isSeparator() {
++  return composing && !(currentLayer === 'shift' && layerLocked)
++}
++
 +export function setComposing(value: boolean) {
 +  if (composing === value) {
 +    return
@@ -4298,7 +4475,7 @@ index 892f0e9..391f324 100644
 +  if (shift) {
 +    shift.innerHTML = shiftKeyInnerHTML({ layer: currentLayer, locked: layerLocked })
 +    const container = shift.parentElement!
-+    currentLayer === 'shift' && !composing ? press(container) : release(container)
++    currentLayer === 'shift' && !isSeparator() ? press(container) : release(container)
 +  }
 +}
 +
@@ -4339,6 +4516,8 @@ index 892f0e9..391f324 100644
 +  // Focused cell of the long press popup, -1 for none.
    index: number
    type: Key['type'] | undefined
++  // Shift touched as the syllable separator.
++  separator?: boolean
    swipeUp?: Swipe
 +  swipeDown?: Swipe
    startX: number
@@ -4370,7 +4549,7 @@ index 892f0e9..391f324 100644
  
  function dragged(touch: Touch) {
    const { clientX: startX, clientY: startY } = touches[touch.identifier].touch
-@@ -60,6 +134,21 @@ function cancelLongPress(touchId: number) {
+@@ -60,6 +144,21 @@ function cancelLongPress(touchId: number) {
    }
  }
  
@@ -4392,7 +4571,7 @@ index 892f0e9..391f324 100644
  export function setLayout(layout: Layout) {
    layout_ = layout
  }
-@@ -74,6 +163,11 @@ export function sendEvent(event: VirtualKeyboardEvent) {
+@@ -74,6 +173,11 @@ export function sendEvent(event: VirtualKeyboardEvent) {
    client_.sendEvent(event)
  }
  
@@ -4404,18 +4583,42 @@ index 892f0e9..391f324 100644
  export function undo() {
    sendEvent({ type: 'UNDO' })
  }
-@@ -131,6 +225,10 @@ function touchDown(touch: Touch) {
+@@ -82,8 +186,8 @@ export function redo() {
+   sendEvent({ type: 'REDO' })
+ }
+ 
+-export function sendKeyDown(key: string, code: string) {
+-  sendEvent({ type: 'KEY_DOWN', data: { key, code } })
++export function sendKeyDown(key: string, code: string, alternatives?: string) {
++  sendEvent({ type: 'KEY_DOWN', data: alternatives ? { key, code, alternatives } : { key, code } })
+ }
+ 
+ export function backspace() {
+@@ -109,7 +213,11 @@ function touchDown(touch: Touch) {
+   const key = getKey(container)
+   switch (key?.type) {
+     case 'key': {
+-      sendKeyDown(key.key ?? '', key.code ?? '')
++      if (key.commit) {
++        sendEvent({ type: 'COMMIT', data: key.key ?? key.label })
++        break
++      }
++      sendKeyDown(key.key ?? '', key.code ?? '', touchAlternatives(key.key ?? '', touch.clientX, touch.clientY))
+       if (shiftPressed) {
+         keyPressedWithShiftPressed = true
+       }
+@@ -131,6 +239,10 @@ function touchDown(touch: Touch) {
        break
      }
      case 'shift': {
-+      if (composing) {
++      if (touches[touch.identifier]?.separator) {
 +        sendKeyDown('\'', 'Quote')
 +        break
 +      }
        shiftPressed = true
        keyPressedWithShiftPressed = false
        const time = new Date().getTime()
-@@ -155,13 +253,23 @@ function touchDown(touch: Touch) {
+@@ -155,13 +267,23 @@ function touchDown(touch: Touch) {
      case 'globe':
        sendEvent({ type: 'GLOBE' })
        break
@@ -4440,7 +4643,7 @@ index 892f0e9..391f324 100644
      shiftPressed = false
      shiftReleased = true
      if (keyPressedWithShiftPressed) {
-@@ -187,6 +295,7 @@ function interrupt(touchId: number) {
+@@ -187,6 +309,7 @@ function interrupt(touchId: number) {
        case 'DOWN':
          break
        default:
@@ -4448,7 +4651,7 @@ index 892f0e9..391f324 100644
          touches[id].state = 'INTERRUPTED'
          hidePopover()
      }
-@@ -194,10 +303,13 @@ function interrupt(touchId: number) {
+@@ -194,10 +317,13 @@ function interrupt(touchId: number) {
  }
  
  function getSwipe(touch: Touch) {
@@ -4464,7 +4667,7 @@ index 892f0e9..391f324 100644
    return undefined
  }
  
-@@ -229,12 +341,18 @@ function doSwipe(touch: Touch) {
+@@ -229,12 +355,18 @@ function doSwipe(touch: Touch) {
        leftAction = () => sendEvent({ type: 'BACKSPACE_SLIDE', data: 'LEFT' })
        rightAction = () => sendEvent({ type: 'BACKSPACE_SLIDE', data: 'RIGHT' })
      }
@@ -4485,7 +4688,7 @@ index 892f0e9..391f324 100644
      }
      else {
        hidePopover()
-@@ -250,31 +368,47 @@ function swipeRelease(touch: Touch) {
+@@ -250,31 +382,55 @@ function swipeRelease(touch: Touch) {
    }
  }
  
@@ -4495,6 +4698,14 @@ index 892f0e9..391f324 100644
 +  { icon: FormatQuote, action: () => sendEvent({ type: 'QUICKPHRASE' }) },
 +  { icon: Unicode, action: () => sendEvent({ type: 'UNICODE' }) },
 +]
++
++// A long press on the separator locks caps, for mixed input with exact case.
++function separatorLongPress(touchId: number) {
++  touches[touchId].timer = null
++  touches[touchId].state = 'PRESSING'
++  touches[touchId].separator = false
++  setLayer('shift', true)
++}
 +
 +function longPressHandler(touchId: number) {
    touches[touchId].timer = null
@@ -4544,7 +4755,7 @@ index 892f0e9..391f324 100644
    const actions = longPress?.cells[index].actions
    actions && executeActions(actions)
    if (currentLayer === 'shift' && !layerLocked) {
-@@ -288,36 +422,52 @@ export function onTouchStart(event: TouchEvent) {
+@@ -288,36 +444,60 @@ export function onTouchStart(event: TouchEvent) {
    let container = getContainer(touch)
    const key = getKey(container)
    let swipeUp: Swipe | undefined
@@ -4552,10 +4763,17 @@ index 892f0e9..391f324 100644
    let timer: number | null = null
    let longPress: LongPress | undefined
    let state: TouchState = 'HIT'
++  let separator = false
    if (key) {
 +    haptic()
      switch (key.type) {
        case 'shift':
++        if (isSeparator()) {
++          // Typed on release; a long press locks caps instead.
++          separator = true
++          timer = window.setTimeout(separatorLongPress, longPressDelay, touch.identifier)
++          break
++        }
          touchDown(touch)
          state = 'DOWN'
          break
@@ -4574,7 +4792,7 @@ index 892f0e9..391f324 100644
 +        // Preview the key above the finger, fcitx5-android's popup on key press.
 +        if (popupOnKeyPress) {
 +          cancelHidePopover()
-+          showPopover(container!, displayLabel(key.label))
++          showPopover(container!, key.commit ? key.label : displayLabel(key.label))
 +        }
 +        break
 +      case 'space':
@@ -4599,12 +4817,13 @@ index 892f0e9..391f324 100644
 +    repeat: null,
 +    commaMenu: key?.type === 'key' ? key.commaMenu : undefined,
      type: key?.type,
++    separator,
      swipeUp,
 +    swipeDown,
      longPress,
      index: longPress?.index ?? 0,
      startX: touch.clientX,
-@@ -333,6 +483,10 @@ export function onTouchMove(event: TouchEvent) {
+@@ -333,6 +513,10 @@ export function onTouchMove(event: TouchEvent) {
    const { state } = touches[touch.identifier]
    switch (state) {
      case 'HIT':
@@ -4615,7 +4834,7 @@ index 892f0e9..391f324 100644
        if (dragged(touch)) {
          cancelLongPress(touch.identifier)
          touches[touch.identifier].state = 'SWIPING'
-@@ -343,21 +497,39 @@ export function onTouchMove(event: TouchEvent) {
+@@ -343,21 +527,39 @@ export function onTouchMove(event: TouchEvent) {
        doSwipe(touch)
        break
      case 'PRESSING':
@@ -4656,7 +4875,7 @@ index 892f0e9..391f324 100644
        touchDown(touch)
        // fall through
      case 'DOWN':
-@@ -375,11 +547,18 @@ export function onTouchEnd(event: TouchEvent) {
+@@ -375,11 +577,18 @@ export function onTouchEnd(event: TouchEvent) {
        }
        break
      case 'PRESSING':
@@ -4677,7 +4896,72 @@ index 892f0e9..391f324 100644
  }
  
  export function setLayer(id: string, locked: boolean) {
-@@ -424,25 +603,31 @@ export function getSpaceKeyLabel() {
+@@ -395,10 +604,64 @@ export function setLayer(id: string, locked: boolean) {
+           locked,
+         }))
+       }
++      renderNumberPanel(id === 'number')
+     }
+   }
+ }
+ 
++// Digit keyboard left panel: + - * / ( ) four at a time, scrolled natively.
++// It sits above the mask and handles its own touches, as keys scrolled out of view must not
++// take touches meant for the keys under them.
++function renderNumberPanel(show: boolean) {
++  document.querySelector('.fcitx-keyboard-number-panel')?.remove()
++  const mask = document.querySelector('.fcitx-keyboard-mask')
++  if (!show || !mask) {
++    return
++  }
++  const frame = document.createElement('div')
++  frame.classList.add('fcitx-keyboard-number-panel', 'fcitx-keyboard-frame')
++  const scroller = document.createElement('div')
++  scroller.classList.add('fcitx-keyboard-number-panel-scroller')
++  for (const symbol of numberPanelSymbols) {
++    const item = document.createElement('div')
++    item.classList.add('fcitx-keyboard-number-panel-item')
++    const key = document.createElement('div')
++    key.classList.add('fcitx-keyboard-key', 'fcitx-keyboard-alternative')
++    key.textContent = symbol
++    item.appendChild(key)
++    scroller.appendChild(item)
++  }
++  let start: { x: number, y: number, item: Element | null } | null = null
++  scroller.addEventListener('touchstart', (event) => {
++    const touch = event.changedTouches[0]
++    const item = (event.target as Element).closest('.fcitx-keyboard-number-panel-item')
++    start = { x: touch.clientX, y: touch.clientY, item }
++    item && press(item)
++    haptic()
++  }, { passive: true })
++  const cancel = () => {
++    start?.item && release(start.item)
++    start = null
++  }
++  scroller.addEventListener('touchmove', (event) => {
++    const touch = event.changedTouches[0]
++    if (start && Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > 8) {
++      cancel()
++    }
++  }, { passive: true })
++  scroller.addEventListener('touchcancel', cancel)
++  scroller.addEventListener('touchend', () => {
++    const item = start?.item
++    cancel()
++    const index = item ? Array.prototype.indexOf.call(scroller.children, item) : -1
++    if (index >= 0) {
++      sendEvent({ type: 'COMMIT', data: numberPanelSymbols[index] })
++    }
++  })
++  frame.appendChild(scroller)
++  mask.after(frame)
++}
++
+ export function getEnterKeyInnerHTML() {
+   return {
+     search: Search,
+@@ -424,25 +687,31 @@ export function getSpaceKeyLabel() {
  
  export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
    spaceKeyLabel = label

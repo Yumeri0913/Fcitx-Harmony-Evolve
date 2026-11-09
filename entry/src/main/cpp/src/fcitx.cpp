@@ -6,6 +6,9 @@
 #include <fcitx-utils/standardpaths.h>
 #include <fstream>
 #include <iterator>
+#include <cstdlib>
+#include <fcitx-utils/stringutils.h>
+#include <libime/pinyin/pinyincontext.h>
 #include <fcitx-config/iniparser.h>
 #include <fcitx-config/rawconfig.h>
 #include <fcitx/action.h>
@@ -235,10 +238,38 @@ InputContextState reset() {
     return with_fcitx([] { return frontend->reset(); });
 }
 
-InputContextState processKey(uint32_t unicode, int32_t keyCode, bool isRelease) {
-    return with_fcitx([unicode, keyCode, isRelease] {
+static libime::PinyinContext::KeyAlternatives parseKeyAlternatives(const std::string &s) {
+    libime::PinyinContext::KeyAlternatives result;
+    auto tab = s.find('\t');
+    if (tab == std::string::npos) {
+        return result;
+    }
+    auto scores = stringutils::split(s.substr(tab + 1), ",");
+    for (size_t i = 0; i < tab && i < scores.size(); i++) {
+        char *end = nullptr;
+        const float score = std::strtof(scores[i].c_str(), &end);
+        if (end == scores[i].c_str()) {
+            return {};
+        }
+        result.emplace_back(s[i], score);
+    }
+    return result;
+}
+
+InputContextState processKey(uint32_t unicode, int32_t keyCode, bool isRelease, const std::string &alternatives) {
+    return with_fcitx([unicode, keyCode, isRelease, &alternatives] {
         auto key = ohKeyToFcitxKey(unicode, keyCode);
-        return frontend->keyEvent(key, isRelease);
+        // Attached by the pinyin context to this key only, see PinyinContext::setPendingKeyAlternatives.
+        auto parsed = parseKeyAlternatives(alternatives);
+        const bool hasAlternatives = !parsed.empty();
+        if (hasAlternatives) {
+            libime::PinyinContext::setPendingKeyAlternatives(std::move(parsed));
+        }
+        auto state = frontend->keyEvent(key, isRelease);
+        if (hasAlternatives) {
+            libime::PinyinContext::setPendingKeyAlternatives({});
+        }
+        return state;
     });
 }
 

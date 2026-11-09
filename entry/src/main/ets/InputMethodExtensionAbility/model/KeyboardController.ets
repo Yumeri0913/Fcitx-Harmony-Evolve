@@ -399,14 +399,15 @@ export class KeyboardController {
     return true
   }
 
-  public handleKey(key: string, keyCode?: number): void {
+  // alternatives: see processKey in libentry.
+  public handleKey(key: string, keyCode?: number, alternatives?: string): void {
     if (key === ' ' && this.maybeDoubleSpacePeriod()) {
       return
     }
     if (key !== ' ') {
       this.lastSpaceTime = 0
     }
-    const res = fcitx.processKey(key ? key.charCodeAt(0) : 0, keyCode ?? 0, false)
+    const res = fcitx.processKey(key ? key.charCodeAt(0) : 0, keyCode ?? 0, false, alternatives ?? '')
     if (!this.processResult(res)) {
       switch (keyCode) { // Check code first as enter has to be handled differently, which has key \r.
         case KeyCode.KEYCODE_DEL:
@@ -487,7 +488,7 @@ export class KeyboardController {
       case 'HAPTIC':
         return this.vibrate()
       case 'KEY_DOWN':
-        return this.handleKey(event.data.key, convertCode(event.data.code))
+        return this.handleKey(event.data.key, convertCode(event.data.code), event.data.alternatives)
       case 'PASTE':
         return this.textInputClient?.sendExtendAction(inputMethodEngine.ExtendAction.PASTE)
       case 'REDO':
@@ -646,8 +647,21 @@ export class KeyboardController {
         spaceSwipeMoveCursor: settings.spaceSwipeMoveCursor,
         slideSensitivity: settings.slideSensitivity,
         longPressDelay: settings.longPressDelay,
+        mmPerPxX: this.mmPerPx(true),
+        mmPerPxY: this.mmPerPx(false),
       }
     })
+  }
+
+  // Millimeters per web (CSS) pixel, one vp, for the keyboard's touch spatial model.
+  private mmPerPx(horizontal: boolean): number {
+    try {
+      const d = display.getDefaultDisplaySync()
+      const dpi = horizontal ? d.xDPI : d.yDPI
+      return dpi > 0 ? 25.4 * d.densityPixels / dpi : 0
+    } catch (e) {
+      return 0
+    }
   }
 
   private updateClipboardSync(enabled: boolean) {
@@ -815,7 +829,7 @@ export class KeyboardController {
     const isRelease = e.keyAction === 3
     let handled = false
     guard('physical key', () => {
-      handled = this.processResult(fcitx.processKey(0, e.keyCode, isRelease))
+      handled = this.processResult(fcitx.processKey(0, e.keyCode, isRelease, ''))
     })
     return handled
   }

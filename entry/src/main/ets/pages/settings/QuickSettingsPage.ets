@@ -324,6 +324,11 @@ export struct QuickSettingsPage {
               this.version >= 0 && this.pinyinBool('Prediction'), true, (on: boolean) => {
                 this.updatePinyin((cfg: RawConfig): void => this.setNode(cfg, 'Prediction', on ? 'True' : 'False'))
               })
+            // Off by default: v stays pinyin, so vpn, vip, vivo are typed like any word.
+            this.toggleRow('V 键快速输入', '开头的 v 进入快速输入，关闭时 v 照常打拼音',
+              this.version >= 0 && this.pinyinBool('VAsQuickphrase'), true, (on: boolean) => {
+                this.updatePinyin((cfg: RawConfig): void => this.setNode(cfg, 'VAsQuickphrase', on ? 'True' : 'False'))
+              })
             this.toggleRow('模糊拼音', '', this.version >= 0 && this.fuzzyEnabled(), true, (on: boolean) => {
               // Like Google Pinyin, turning it on enables its default pairs.
               this.updatePinyin((cfg: RawConfig): void => {
