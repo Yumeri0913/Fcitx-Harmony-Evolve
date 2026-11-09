@@ -32,7 +32,15 @@ struct Index {
         this.port = ports[1]
         this.port.onMessageEvent(msg => {
           const event = JSON.parse(msg as string) as VirtualKeyboardEvent
-          keyboardController.handleVirtualKeyboardEvent(event)
+          try {
+            const result = keyboardController.handleVirtualKeyboardEvent(event)
+            if (result instanceof Promise) {
+              result.catch((e: Error) => console.error(`${event.type} failed: ${e.message}`))
+            }
+          } catch (e) {
+            // The editor lost focus or timed out; the keyboard must survive it.
+            console.error(`${event.type} failed: ${e}`)
+          }
         })
         this.controller.postMessage('__init_port__', [ports[0]], '*')
         keyboardController.setPort(this.port)

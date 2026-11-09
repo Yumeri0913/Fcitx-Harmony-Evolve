@@ -14,6 +14,7 @@ import {
 import { ClipboardEntry, ClipboardStore } from './ClipboardStore';
 import fcitx, { InputContextState } from 'libentry.so';
 import { FcitxEvent } from './FcitxEvent';
+import { ensureDir } from '../../common/Files';
 import { convertCode } from './keycode';
 import { onTextChange, redo, resetStacks, undo } from './TextOperation';
 import {
@@ -65,6 +66,20 @@ const hapticDurations: Record<string, number> = {
   'heavy': 30,
 }
 
+// A synchronous call to the editor that takes this long means it answers slowly or never.
+const SLOW_EDITOR_MS = 1000
+// Editors whose synchronous calls timed out, by bundle name, for the life of the process.
+const slowEditors = new Set<string>()
+
+// Errors from the editor (it lost focus, or timed out) must not kill the keyboard.
+function guard(name: string, action: () => void): void {
+  try {
+    action()
+  } catch (e) {
+    console.error(`${name} failed: ${e}`)
+  }
+}
+
 const ability: inputMethodEngine.InputMethodAbility = inputMethodEngine.getInputMethodAbility();
 const keyboardDelegate = inputMethodEngine.getKeyboardDelegate() // Physical keyboard
 
@@ -76,6 +91,10 @@ export class KeyboardController {
   private textInputClient: inputMethodEngine.InputClient | undefined = undefined;
   private keyboardController: inputMethodEngine.KeyboardController | undefined = undefined;
   private initialized = false
+  private initRetries = 0
+  // Android apps in 卓易通 answer synchronous calls through the container's broker, which can
+  // time out after 3 s and throw. Text goes in with asynchronous calls there.
+  private asyncEditor = false
   // Virtual keyboard states
   private hasCandidates = false
   private hasPreeditOrAux = false
@@ -146,6 +165,10 @@ export class KeyboardController {
   }
 
   private processAsyncData(data: string) {
+    guard('processAsyncData', () => this.handleAsyncData(data))
+  }
+
+  private handleAsyncData(data: string): void {
     console.debug(`processing data: ${data}`)
     const event = JSON.parse(data) as SystemEvent | FcitxEvent
     switch (event.type) {
@@ -235,7 +258,9 @@ export class KeyboardController {
     this.updatePreviewText('')
     this.insertText(text)
     this.preedit = ''
-    this.preeditIndex = this.textInputClient?.getTextIndexAtCursorSync() ?? -1
+    if (!this.asyncEditor) {
+      this.preeditIndex = this.textInputClient?.getTextIndexAtCursorSync() ?? -1
+    }
   }
 
   private updatePreviewText(text: string, cursorPos: number = 0) {
@@ -361,7 +386,7 @@ export class KeyboardController {
     const now = Date.now()
     const previous = this.lastSpaceTime
     this.lastSpaceTime = now
-    if (!this.settings?.doubleSpacePeriod || this.hasPreeditOrAux || now - previous > 300) {
+    if (!this.settings?.doubleSpacePeriod || this.hasPreeditOrAux || now - previous > 300 || this.asyncEditor) {
       return false
     }
     const before = this.textInputClient?.getForwardSync(2) ?? ''
@@ -497,11 +522,41 @@ export class KeyboardController {
   }
 
   public insertText(text: string): void {
-    this.textInputClient?.insertTextSync(text);
+    const client = this.textInputClient
+    if (!client) {
+      return
+    }
+    if (this.asyncEditor) {
+      client.insertText(text).catch((e: Error) => console.error(`insertText failed: ${e.message}`))
+      return
+    }
+    this.callEditor('insertText', () => client.insertTextSync(text))
   }
 
   public deleteForward(length: number): void {
-    this.textInputClient?.deleteForwardSync(length);
+    const client = this.textInputClient
+    if (!client) {
+      return
+    }
+    if (this.asyncEditor) {
+      client.deleteForward(length).catch((e: Error) => console.error(`deleteForward failed: ${e.message}`))
+      return
+    }
+    this.callEditor('deleteForward', () => client.deleteForwardSync(length))
+  }
+
+  // Not retried: a timed out call may still reach the editor later.
+  private callEditor(name: string, action: () => void): void {
+    const start = Date.now()
+    try {
+      action()
+    } catch (e) {
+      console.error(`${name} failed: ${e}`)
+      if (Date.now() - start >= SLOW_EDITOR_MS) {
+        slowEditors.add(this.attribute?.bundleName ?? '')
+        this.asyncEditor = true
+      }
+    }
   }
 
   private initWindow(): void {
@@ -527,7 +582,8 @@ export class KeyboardController {
       })
       this.panel.on('hide', () => {
         console.debug('hide')
-        this.processResult(fcitx.reset()) // Need it when dragging right edge to collapse keyboard.
+        // Need it when dragging right edge to collapse keyboard. The editor may be gone.
+        guard('reset', () => this.processResult(fcitx.reset()))
         this.sendEvent({ type: 'HIDE' })
         // Persist learned words now instead of waiting for the periodic save, like
         // fcitx5-android. Config changed by the settings page is reloaded first.
@@ -674,7 +730,7 @@ export class KeyboardController {
         const from = `${this.filesDir}/data/fcitx5/pinyin/${file}`
         if (fs.accessSync(from)) {
           const to = userDataCopyPath(this.sharedDir, file)
-          fs.mkdirSync(to.substring(0, to.lastIndexOf('/')), true)
+          ensureDir(to.substring(0, to.lastIndexOf('/')))
           fs.copyFileSync(from, to)
         }
       }
@@ -747,8 +803,11 @@ export class KeyboardController {
 
   private physicalKeyEventHandler(e: inputMethodEngine.KeyEvent): boolean {
     const isRelease = e.keyAction === 3
-    const res = fcitx.processKey(0, e.keyCode, isRelease)
-    return this.processResult(res)
+    let handled = false
+    guard('physical key', () => {
+      handled = this.processResult(fcitx.processKey(0, e.keyCode, isRelease))
+    })
+    return handled
   }
 
   private initHelper() {
@@ -764,7 +823,10 @@ export class KeyboardController {
       this.initialized = true
     } catch (e) { // getTextIndexAtCursorSync can throw.
       console.error(`${e}`)
-      setTimeout(() => { this.initHelper() }, 100)
+      // Not forever: the editor may be gone.
+      if (++this.initRetries < 10) {
+        setTimeout(() => { this.initHelper() }, 100)
+      }
     }
   }
 
@@ -808,13 +870,19 @@ export class KeyboardController {
 
   private registerInputListener(): void {
     ability.on('inputStart', (kbController, textInputClient) => {
-      console.debug('inputStart')
       this.initialized = false
+      this.initRetries = 0
       this.textInputClient = textInputClient;
       this.keyboardController = kbController;
-      this.attribute = textInputClient.getEditorAttributeSync()
-      fcitx.focusIn(this.attribute.isTextPreviewSupported)
-      this.setEnterKeyType()
+      guard('inputStart', () => {
+        this.attribute = textInputClient.getEditorAttributeSync()
+        const bundleName = this.attribute.bundleName ?? ''
+        this.asyncEditor = slowEditors.has(bundleName)
+        console.info(`inputStart ${bundleName} preview ${this.attribute.isTextPreviewSupported} async ${this.asyncEditor}`)
+        // Preview text is synchronous only.
+        fcitx.focusIn(this.attribute.isTextPreviewSupported && !this.asyncEditor)
+        this.setEnterKeyType()
+      })
     })
     ability.on('inputStop', () => {
       // This is not paired with inputStart. Only called when switching to Celia.
