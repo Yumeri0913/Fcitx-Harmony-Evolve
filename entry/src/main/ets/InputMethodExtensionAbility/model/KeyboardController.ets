@@ -92,8 +92,8 @@ export class KeyboardController {
   private keyboardController: inputMethodEngine.KeyboardController | undefined = undefined;
   private initialized = false
   private initRetries = 0
-  // Android apps in 卓易通 answer synchronous calls through the container's broker, which can
-  // time out after 3 s and throw. Text goes in with asynchronous calls there.
+  // Android apps in 卓易通 answer synchronous calls through the container's broker, which
+  // times out after 3 s and throws. Text goes in with asynchronous calls there.
   private asyncEditor = false
   // Virtual keyboard states
   private hasCandidates = false
@@ -877,7 +877,8 @@ export class KeyboardController {
       guard('inputStart', () => {
         this.attribute = textInputClient.getEditorAttributeSync()
         const bundleName = this.attribute.bundleName ?? ''
-        this.asyncEditor = slowEditors.has(bundleName)
+        // Editors in 卓易通 come through its broker without a bundle name.
+        this.asyncEditor = !bundleName || slowEditors.has(bundleName)
         console.info(`inputStart ${bundleName} preview ${this.attribute.isTextPreviewSupported} async ${this.asyncEditor}`)
         // Preview text is synchronous only.
         fcitx.focusIn(this.attribute.isTextPreviewSupported && !this.asyncEditor)
