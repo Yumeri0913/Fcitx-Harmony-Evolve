@@ -121,7 +121,7 @@ index 23fc6d3..a2961aa 100644
    type: 'CANDIDATE_ACTION'
    data: {
 diff --git a/src/candidates.ts b/src/candidates.ts
-index 50face8..442c434 100644
+index 50face8..a71abc1 100644
 --- a/src/candidates.ts
 +++ b/src/candidates.ts
 @@ -1,13 +1,20 @@
@@ -182,7 +182,7 @@ index 50face8..442c434 100644
      }
      element.innerHTML = ''
      if (auxUp) {
-@@ -82,69 +95,116 @@ export function setPreedit(auxUp: string, preedit: string, caret: number) {
+@@ -82,69 +95,119 @@ export function setPreedit(auxUp: string, preedit: string, caret: number) {
          element.appendChild(preCaretElement)
        }
      }
@@ -319,15 +319,18 @@ index 50face8..442c434 100644
 +    if (expanded && offset > 0) {
 +      grid().appendChild(renderCandidate(cands[i].text, offset + i))
 +    }
-+  }
+   }
+-  setPagingButtons(container)
+-  if (!hasPanelPreedit && !hasClientPreedit) {
 +  // Fill the width only when the row is full, like fcitx5-android's AutoFillWidth.
 +  container.classList.toggle('fcitx-keyboard-candidates-fill', container.childElementCount >= MAX_SPAN_COUNT)
 +  if (expanded && offset === 0) {
 +    fillGrid()
-   }
--  setPagingButtons(container)
--  if (!hasPanelPreedit && !hasClientPreedit) {
-+  setPagingButtons(grid())
++  }
++  if (expanded) {
++    // Reads layout, so only when the grid shows.
++    setPagingButtons(grid())
++  }
 +  if (!hasPanelPreedit && !hasClientPreedit && scrollState !== SCROLLING) {
      collapse()
    }
@@ -338,7 +341,7 @@ index 50face8..442c434 100644
  }
  
  export function setCandidateActions(index: number, actions: CandidateAction[]) {
-@@ -161,48 +221,61 @@ export function setCandidateActions(index: number, actions: CandidateAction[]) {
+@@ -161,48 +224,61 @@ export function setCandidateActions(index: number, actions: CandidateAction[]) {
    })))
  }
  
@@ -429,7 +432,7 @@ index 50face8..442c434 100644
    const button = div('fcitx-keyboard-side-button')
    button.innerHTML = label
    container.appendChild(button)
-@@ -212,93 +285,51 @@ function renderSideButton(label: string) {
+@@ -212,93 +288,51 @@ function renderSideButton(label: string) {
    return container
  }
  
@@ -1213,10 +1216,10 @@ index 8a28451..b2694e8 100644
        container.setAttribute(DATA_KEY, dataKey)
        break
 diff --git a/src/keyboard.ts b/src/keyboard.ts
-index 9cbf8f1..d781c00 100644
+index 9cbf8f1..d4ed60e 100644
 --- a/src/keyboard.ts
 +++ b/src/keyboard.ts
-@@ -1,20 +1,64 @@
+@@ -1,20 +1,65 @@
 -import type { SystemEvent } from './api'
 +import type { KeyboardConfig, SystemEvent } from './api'
  import type { BUILTIN_LAYOUT, Layout } from './layout'
@@ -1228,9 +1231,10 @@ index 9cbf8f1..d781c00 100644
 -import { removeCandidatesFromStack, setDisplayMode } from './display'
 +import { getDisplayMode, removeCandidatesFromStack, setDisplayMode } from './display'
  import { deselect, renderEditor, select } from './editor'
+-import { renderPopover } from './popover'
 +import { googlePinyinLayout } from './googlepinyin'
 +import { renderPicker, renderPickerBar } from './picker'
- import { renderPopover } from './popover'
++import { renderPopover, setPopupMetrics } from './popover'
  import { renderReturnBar } from './return'
  import { renderStatusArea, setStatusArea } from './statusArea'
 -import { renderSymbolSelector } from './symbol'
@@ -1276,6 +1280,7 @@ index 9cbf8f1..d781c00 100644
 +  container.style.setProperty('--fcitx-key-margin-x', `${config_.keyMarginX}px`)
 +  container.style.setProperty('--fcitx-key-margin-y', `${config_.keyMarginY}px`)
 +  container.style.setProperty('--fcitx-key-radius', `${config_.keyRadius}px`)
++  setPopupMetrics(config_.keyMarginY, config_.keyRadius)
 +  setPopupOnKeyPress(config_.popupOnKeyPress)
 +  setKeyBehavior(config_.slideSensitivity ?? 1, config_.longPressDelay ?? 300, config_.spaceSwipeMoveCursor ?? true)
 +}
@@ -1287,7 +1292,7 @@ index 9cbf8f1..d781c00 100644
  
  export function setLayout(id: string, layout: Layout) {
    setLayout_(layout)
-@@ -25,6 +69,7 @@ export function setLayout(id: string, layout: Layout) {
+@@ -25,6 +70,7 @@ export function setLayout(id: string, layout: Layout) {
    const toolbar = renderToolbar()
    const candidateBar = renderCandidateBar()
    const returnBar = renderReturnBar()
@@ -1295,7 +1300,7 @@ index 9cbf8f1..d781c00 100644
  
    const keyboard = div('fcitx-keyboard')
    keyboard.classList.add('fcitx-keyboard-frame')
-@@ -36,7 +81,7 @@ export function setLayout(id: string, layout: Layout) {
+@@ -36,7 +82,7 @@ export function setLayout(id: string, layout: Layout) {
    mask.addEventListener('touchstart', onTouchStart)
    mask.addEventListener('touchmove', onTouchMove)
    mask.addEventListener('touchend', onTouchEnd)
@@ -1304,7 +1309,7 @@ index 9cbf8f1..d781c00 100644
  
    const editor = renderEditor()
    editor.classList.add('fcitx-keyboard-frame')
-@@ -44,8 +89,11 @@ export function setLayout(id: string, layout: Layout) {
+@@ -44,8 +90,11 @@ export function setLayout(id: string, layout: Layout) {
    const statusArea = renderStatusArea()
    statusArea.classList.add('fcitx-keyboard-frame')
  
@@ -1318,7 +1323,7 @@ index 9cbf8f1..d781c00 100644
  
    const contextmenu = renderContextmenu()
    hide(contextmenu)
-@@ -61,17 +109,25 @@ export function setLayout(id: string, layout: Layout) {
+@@ -61,17 +110,25 @@ export function setLayout(id: string, layout: Layout) {
      toolbar,
      candidateBar,
      returnBar,
@@ -1345,7 +1350,7 @@ index 9cbf8f1..d781c00 100644
    if (isAndroidOrIOS) {
      // Disable iOS Safari select text.
      // Ideally Android doesn't need this, but default behavior of touchstart will cause input blur.
-@@ -84,6 +140,7 @@ export function setLayout(id: string, layout: Layout) {
+@@ -84,6 +141,7 @@ export function setLayout(id: string, layout: Layout) {
    const app = document.getElementById(id)!
    app.innerHTML = ''
    app.appendChild(container)
@@ -1353,7 +1358,7 @@ index 9cbf8f1..d781c00 100644
    setDisplayMode('initial')
    if (isFirefox) {
      // Firefox is buggy if render synchronously.
-@@ -108,10 +165,15 @@ export function onMessage(message: string) {
+@@ -108,10 +166,15 @@ export function onMessage(message: string) {
        break
      case 'HIDE':
        setLayer('default', false)
@@ -1369,7 +1374,7 @@ index 9cbf8f1..d781c00 100644
        break
      case 'PREEDIT':
        setPreedit(event.data.auxUp, event.data.preedit, event.data.caret)
-@@ -127,6 +189,16 @@ export function onMessage(message: string) {
+@@ -127,6 +190,16 @@ export function onMessage(message: string) {
        break
      case 'INPUT_METHODS':
        setInputMethods(event.data.inputMethods, event.data.currentInputMethod)
@@ -1823,10 +1828,10 @@ index 0000000..d0d5440
 +  return picker
 +}
 diff --git a/src/popover.ts b/src/popover.ts
-index 89dbb48..615a8f4 100644
+index 89dbb48..f37c42d 100644
 --- a/src/popover.ts
 +++ b/src/popover.ts
-@@ -1,58 +1,244 @@
+@@ -1,58 +1,243 @@
 -import type { LongPress } from './layout'
  import { div, hide, show } from './util'
  
@@ -1849,14 +1854,13 @@ index 89dbb48..615a8f4 100644
 +let cellHeight = POPUP_KEY_HEIGHT
 +let menu = false
 +
-+function keyBottomMargin() {
-+  const container = document.querySelector('.fcitx-keyboard-container') as HTMLElement
-+  return Number.parseFloat(getComputedStyle(container).getPropertyValue('--fcitx-key-margin-y')) || 0
-+}
++// From the keyboard config, so a key press doesn't force a style recalculation.
++let keyMarginY = 0
++let keyRadius = '2px'
 +
-+function popupRadius() {
-+  const container = document.querySelector('.fcitx-keyboard-container') as HTMLElement
-+  return getComputedStyle(container).getPropertyValue('--fcitx-key-radius') || '2px'
++export function setPopupMetrics(marginY: number, radius: number) {
++  keyMarginY = marginY
++  keyRadius = `${radius}px`
 +}
 +
  export function renderPopover() {
@@ -1869,18 +1873,18 @@ index 89dbb48..615a8f4 100644
 +  hide(keyboard)
 +  root.append(preview, keyboard)
 +  return root
- }
- 
--export function showPopover(element: Element, display: string | LongPress) {
--  const container = document.querySelector('.fcitx-keyboard-popover-container') as HTMLElement
++}
++
 +function root() {
 +  return document.querySelector('.fcitx-keyboard-popover-container') as HTMLElement
 +}
 +
 +function previewElement() {
 +  return document.querySelector('.fcitx-keyboard-preview') as HTMLElement
-+}
-+
+ }
+ 
+-export function showPopover(element: Element, display: string | LongPress) {
+-  const container = document.querySelector('.fcitx-keyboard-popover-container') as HTMLElement
 +function keyboardElement() {
 +  return document.querySelector('.fcitx-keyboard-popup-keyboard') as HTMLElement
 +}
@@ -1896,12 +1900,12 @@ index 89dbb48..615a8f4 100644
 +  const preview = previewElement()
 +  // fcitx5-android draws it over the app; here it is clipped to the keyboard's window, so
 +  // it is shortened to start at the top.
-+  const bottom = box.bottom - keyBottomMargin()
++  const bottom = box.bottom - keyMarginY
 +  const top = Math.max(0, bottom - POPUP_HEIGHT)
 +  preview.style.left = `${Math.max(0, Math.min(window.innerWidth - POPUP_WIDTH, (box.left + box.right - POPUP_WIDTH) / 2))}px`
 +  preview.style.top = `${top}px`
 +  preview.style.height = `${bottom - top}px`
-+  preview.style.borderRadius = popupRadius()
++  preview.style.borderRadius = keyRadius
 +  ;(preview.firstElementChild as HTMLElement).innerHTML = label
 +  show(preview)
 +  show(root())
@@ -1962,38 +1966,32 @@ index 89dbb48..615a8f4 100644
 +  const keyboard = keyboardElement()
 +  keyboard.className = 'fcitx-keyboard-popup-keyboard'
 +  keyboard.innerHTML = ''
-+  keyboard.style.borderRadius = popupRadius()
++  keyboard.style.borderRadius = keyRadius
 +  // Rows with smaller index show at the bottom.
 +  for (let row = rowCount - 1; row >= 0; --row) {
 +    const rowElement = div('fcitx-keyboard-popup-row')
 +    const cells = keyOrders[row].filter(index => index < labels.length)
 +    if (cells.length < columnCount && keyOrders[row][0] >= labels.length) {
 +      rowElement.style.justifyContent = 'flex-end'
++    }
++    for (const index of cells) {
++      const cell = div('fcitx-keyboard-popup-cell')
++      cell.setAttribute('data-index', `${index}`)
++      cell.style.width = `${cellWidth}px`
++      cell.style.height = `${cellHeight}px`
++      cell.style.borderRadius = keyRadius
++      cell.innerHTML = labels[index]
++      rowElement.appendChild(cell)
      }
 -    popover.innerHTML = labels[i]
 -    cell.appendChild(popover)
 -    cell.style.width = `${box.width}px`
 -    cell.style.height = `${box.height}px`
 -    container.appendChild(cell)
-+    for (const index of cells) {
-+      const cell = div('fcitx-keyboard-popup-cell')
-+      cell.setAttribute('data-index', `${index}`)
-+      cell.style.width = `${cellWidth}px`
-+      cell.style.height = `${cellHeight}px`
-+      cell.style.borderRadius = popupRadius()
-+      cell.innerHTML = labels[index]
-+      rowElement.appendChild(cell)
-+    }
 +    keyboard.appendChild(rowElement)
-   }
--  show(container)
--  let offset = 0
--  if (index !== -1) {
--    const containerBox = container.getBoundingClientRect()
--    const highlightedBox = container.querySelector('.fcitx-keyboard-highlighted')!.getBoundingClientRect()
--    offset = containerBox.left - highlightedBox.left
++  }
 +  containerLeft = (box.left + box.right - cellWidth) / 2 - cellWidth * focusColumn
-+  containerTop = Math.max(0, box.bottom - keyBottomMargin() - POPUP_HEIGHT) - cellHeight * (rowCount - 1)
++  containerTop = Math.max(0, box.bottom - keyMarginY - POPUP_HEIGHT) - cellHeight * (rowCount - 1)
 +  // Kept inside the window, possibly over the key.
 +  containerTop = Math.max(0, containerTop)
 +  keyboard.style.left = `${containerLeft}px`
@@ -2022,7 +2020,7 @@ index 89dbb48..615a8f4 100644
 +  const keyboard = keyboardElement()
 +  keyboard.className = 'fcitx-keyboard-popup-keyboard fcitx-keyboard-popup-menu'
 +  keyboard.innerHTML = ''
-+  keyboard.style.borderRadius = popupRadius()
++  keyboard.style.borderRadius = keyRadius
 +  const rowElement = div('fcitx-keyboard-popup-row')
 +  // Items in column order, so index i is the i-th icon.
 +  const byColumn = Array.from({ length: columnCount }, (_, column) => order[column])
@@ -2036,9 +2034,12 @@ index 89dbb48..615a8f4 100644
 +    cell.appendChild(icon)
 +    rowElement.appendChild(cell)
    }
--  container.style.left = `${box.left + offset}px`
--  container.style.top = `${box.top - box.height}px`
--  container.style.borderRadius = `${box.height * 0.07}px`
+-  show(container)
+-  let offset = 0
+-  if (index !== -1) {
+-    const containerBox = container.getBoundingClientRect()
+-    const highlightedBox = container.querySelector('.fcitx-keyboard-highlighted')!.getBoundingClientRect()
+-    offset = containerBox.left - highlightedBox.left
 +  keyboard.appendChild(rowElement)
 +  containerLeft = (box.left + box.right - cellWidth) / 2 - cellWidth * focusColumn
 +  containerTop = Math.max(0, box.top - 52)
@@ -2051,13 +2052,8 @@ index 89dbb48..615a8f4 100644
 +  show(keyboard)
 +  show(root())
 +  return focusedIndex
- }
- 
--export function updateHighlight(index: number, direction: 'LEFT' | 'RIGHT') {
--  const cells = document.querySelectorAll('.fcitx-keyboard-popover-cell')
--  const newIndex = direction === 'LEFT' ? index - 1 : index + 1
--  if (newIndex < 0 || newIndex >= cells.length) {
--    return index
++}
++
 +// Moves the focus with the finger; -1 when the finger goes far away, which cancels.
 +export function updatePopupFocus(clientX: number, clientY: number) {
 +  const x = clientX - containerLeft
@@ -2076,14 +2072,17 @@ index 89dbb48..615a8f4 100644
 +    focusedIndex = index
 +    markFocus(index)
    }
--  cells[index].classList.remove('fcitx-keyboard-highlighted')
--  cells[newIndex].classList.add('fcitx-keyboard-highlighted')
--  return newIndex
+-  container.style.left = `${box.left + offset}px`
+-  container.style.top = `${box.top - box.height}px`
+-  container.style.borderRadius = `${box.height * 0.07}px`
 +  return focusedIndex
  }
  
--export function hidePopover() {
--  hide(document.querySelector('.fcitx-keyboard-popover-container')!)
+-export function updateHighlight(index: number, direction: 'LEFT' | 'RIGHT') {
+-  const cells = document.querySelectorAll('.fcitx-keyboard-popover-cell')
+-  const newIndex = direction === 'LEFT' ? index - 1 : index + 1
+-  if (newIndex < 0 || newIndex >= cells.length) {
+-    return index
 +let hideTimer: number | null = null
 +
 +export function hidePopover(delay = 0) {
@@ -2104,9 +2103,14 @@ index 89dbb48..615a8f4 100644
 +  }
 +  else {
 +    doHide()
-+  }
-+}
-+
+   }
+-  cells[index].classList.remove('fcitx-keyboard-highlighted')
+-  cells[newIndex].classList.add('fcitx-keyboard-highlighted')
+-  return newIndex
+ }
+ 
+-export function hidePopover() {
+-  hide(document.querySelector('.fcitx-keyboard-popover-container')!)
 +export function cancelHidePopover() {
 +  if (hideTimer) {
 +    clearTimeout(hideTimer)
@@ -4240,7 +4244,7 @@ index 363a40c..d05cd19 100644
 +  return navigator.language.startsWith('zh') ? zh : en
 +}
 diff --git a/src/ux.ts b/src/ux.ts
-index 892f0e9..52fea67 100644
+index 892f0e9..391f324 100644
 --- a/src/ux.ts
 +++ b/src/ux.ts
 @@ -3,16 +3,20 @@ import type { InputMethod, VirtualKeyboardClient, VirtualKeyboardEvent } from '.
@@ -4540,7 +4544,7 @@ index 892f0e9..52fea67 100644
    const actions = longPress?.cells[index].actions
    actions && executeActions(actions)
    if (currentLayer === 'shift' && !layerLocked) {
-@@ -288,24 +422,35 @@ export function onTouchStart(event: TouchEvent) {
+@@ -288,36 +422,52 @@ export function onTouchStart(event: TouchEvent) {
    let container = getContainer(touch)
    const key = getKey(container)
    let swipeUp: Swipe | undefined
@@ -4581,7 +4585,14 @@ index 892f0e9..52fea67 100644
          break
      }
    }
-@@ -316,8 +461,11 @@ export function onTouchStart(event: TouchEvent) {
+-  // Must recalculate container as layer may have been changed.
+-  container = getContainer(touch)
++  // Must recalculate container as shift has changed the layer.
++  if (key?.type === 'shift') {
++    container = getContainer(touch)
++  }
+   container && press(container)
+   touches[touch.identifier] = {
      touch,
      state,
      timer,
@@ -4593,7 +4604,7 @@ index 892f0e9..52fea67 100644
      longPress,
      index: longPress?.index ?? 0,
      startX: touch.clientX,
-@@ -333,6 +481,10 @@ export function onTouchMove(event: TouchEvent) {
+@@ -333,6 +483,10 @@ export function onTouchMove(event: TouchEvent) {
    const { state } = touches[touch.identifier]
    switch (state) {
      case 'HIT':
@@ -4604,7 +4615,7 @@ index 892f0e9..52fea67 100644
        if (dragged(touch)) {
          cancelLongPress(touch.identifier)
          touches[touch.identifier].state = 'SWIPING'
-@@ -343,21 +495,39 @@ export function onTouchMove(event: TouchEvent) {
+@@ -343,21 +497,39 @@ export function onTouchMove(event: TouchEvent) {
        doSwipe(touch)
        break
      case 'PRESSING':
@@ -4645,7 +4656,7 @@ index 892f0e9..52fea67 100644
        touchDown(touch)
        // fall through
      case 'DOWN':
-@@ -375,11 +545,18 @@ export function onTouchEnd(event: TouchEvent) {
+@@ -375,11 +547,18 @@ export function onTouchEnd(event: TouchEvent) {
        }
        break
      case 'PRESSING':
@@ -4666,7 +4677,7 @@ index 892f0e9..52fea67 100644
  }
  
  export function setLayer(id: string, locked: boolean) {
-@@ -424,25 +601,31 @@ export function getSpaceKeyLabel() {
+@@ -424,25 +603,31 @@ export function getSpaceKeyLabel() {
  
  export function setSpaceKeyLabel(space: HTMLElement | null, label: string) {
    spaceKeyLabel = label

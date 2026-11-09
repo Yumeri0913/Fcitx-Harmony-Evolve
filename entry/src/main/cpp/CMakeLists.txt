@@ -4,6 +4,12 @@ project(fcitx5-harmony VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 20)
 add_definitions(-fexperimental-library) # TODO: check if clang 16+ needs it.
 
+# The OHOS toolchain builds Debug at -O0, which makes pinyin decoding visibly slow on
+# devices. Optimize debug builds too, keeping their debug info.
+foreach(lang C CXX)
+    string(REPLACE "-O0" "-O2" CMAKE_${lang}_FLAGS_DEBUG "${CMAKE_${lang}_FLAGS_DEBUG}")
+endforeach()
+
 set(PREBUILT_ROOT "${PROJECT_SOURCE_DIR}/prebuilt/${OHOS_ARCH}")
 set(PREBUILT_USR "${PREBUILT_ROOT}/usr")
 set(CMAKE_INSTALL_PREFIX "/usr")
